@@ -1,20 +1,24 @@
 {
-    "name": "{{ project-name }}",
-    "private": true,
-    "version": "1.0.0",
-    "description": "package for creating workers templates",
-    "main": "index.js",
-    "scripts": {
-        "test": "echo \"Error: no test specified\" && exit 1",
-        "format": "prettier --write '**/*.{js,css,json,md}'"
-    },
-    "author": "{{ authors }}",
-    "license": "ISC",
-    "devDependencies": {
-        "prettier": "^1.17.0"
-    },
-    "dependencies": {
-        "itty-router": "^2.1.9",
-        "serverless-cloudflare-workers": "^1.2.0"
-    }
+  "name": "slack-restaurant-picker",
+  "version": "1.0.0",
+  "description": "Restaurant Picker - A Slack bot to be deployed on Cloudflare Workers",
+  "main": "index.js",
+  "scripts": {
+    "format": "prettier --write '**/*.{js,css,json,md}'"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Kit-p/Slack-Restaurant-Picker.git"
+  },
+  "author": "Kit PANG",
+  "license": "MIT",
+  "homepage": "https://github.com/kit-p/json-kit",
+  "private": true,
+  "devDependencies": {
+    "prettier": "^1.17.0"
+  },
+  "dependencies": {
+    "itty-router": "^2.1.9",
+    "serverless-cloudflare-workers": "^1.2.0"
+  }
 }
