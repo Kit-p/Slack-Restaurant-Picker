@@ -369,7 +369,11 @@ async function pick_restaurant_help(conversation, user_id) {
   return status(200);
 }
 
-async function pick_restaurant_list(conversation, trigger_id) {
+async function pick_restaurant_list(
+  conversation,
+  trigger_or_view_id,
+  is_update = false
+) {
   let bookmark = await pick_restaurant_get_url(conversation);
   if (bookmark == null) {
     await pick_restaurant_setup(conversation, true);
@@ -381,112 +385,142 @@ async function pick_restaurant_list(conversation, trigger_id) {
     }
   }
 
-  const data = JsonKit.parse(bookmark.link.searchParams.get('data'));
+  const raw_data = bookmark.link.searchParams.get('data');
+  const data = JsonKit.parse(raw_data);
   if (!pick_restaurant_validate_data(conversation, data)) {
     // TODO: call pick_restaurant_repair
     console.error('Invalid bookmark data');
     return status(500);
   }
 
-  const response = await send_slack_request('POST', '/views.open', {
-    trigger_id,
-    view: {
-      type: 'modal',
-      title: {
-        type: 'plain_text',
-        text: 'Restaurant List',
-        emoji: true,
-      },
-      close: {
-        type: 'plain_text',
-        text: 'Close',
-        emoji: true,
-      },
-      submit: {
-        type: 'plain_text',
-        text: 'Done',
-        emoji: true,
-      },
-      private_metadata: JsonKit.stringify({
-        conversation,
-        data_ts: data.ts,
-      }),
-      callback_id: 'pick_restaurant-list',
-      blocks: [
-        ...data.list
-          .sort((a, b) => {
-            if (a.win_count !== b.win_count) {
-              return b.win_count - a.win_count;
-            }
-            if (a.shown_count !== b.shown_count) {
-              return a.shown_count - b.shown_count;
-            }
-            return b.weight - a.weight;
-          })
-          .flatMap(restaurant => {
-            return [
-              {
-                block_id: restaurant.id,
-                type: 'section',
-                text: {
-                  type: 'mrkdwn',
-                  text: `:knife_fork_plate: *${restaurant.name}*`,
-                },
-                accessory: {
-                  type: 'overflow',
-                  options: [
-                    {
-                      text: {
+  const response = await send_slack_request(
+    'POST',
+    is_update ? '/views.update' : '/views.open',
+    {
+      ...(is_update
+        ? { view_id: trigger_or_view_id }
+        : { trigger_id: trigger_or_view_id }),
+      view: {
+        type: 'modal',
+        title: {
+          type: 'plain_text',
+          text: 'Restaurant List',
+          emoji: true,
+        },
+        close: {
+          type: 'plain_text',
+          text: 'Close',
+          emoji: true,
+        },
+        submit: {
+          type: 'plain_text',
+          text: 'Done',
+          emoji: true,
+        },
+        private_metadata: JsonKit.stringify({
+          conversation,
+          data: raw_data,
+        }),
+        callback_id: 'pick_restaurant-list',
+        blocks: [
+          ...data.list
+            .sort((a, b) => {
+              if (a.win_count !== b.win_count) {
+                return b.win_count - a.win_count;
+              }
+              if (a.shown_count !== b.shown_count) {
+                return a.shown_count - b.shown_count;
+              }
+              return b.weight - a.weight;
+            })
+            .flatMap(restaurant => {
+              return [
+                {
+                  block_id: restaurant.id,
+                  type: 'section',
+                  text: {
+                    type: 'mrkdwn',
+                    text: `:knife_fork_plate: *${restaurant.name}*`,
+                  },
+                  accessory: {
+                    type: 'overflow',
+                    confirm: {
+                      title: {
                         type: 'plain_text',
-                        text: ':pencil2:    Edit',
+                        text: 'Are you sure?',
                         emoji: true,
                       },
-                      value: 'edit',
+                      text: {
+                        type: 'plain_text',
+                        text: `You are going to edit/remove *${restaurant.name}*!\nPlease confirm the action.`,
+                        emoji: true,
+                      },
+                      confirm: {
+                        type: 'plain_text',
+                        text: 'Continue',
+                        emoji: true,
+                      },
+                      deny: {
+                        type: 'plain_text',
+                        text: 'Cancel',
+                        emoji: true,
+                      },
+                      style: 'danger',
+                    },
+                    options: [
+                      {
+                        text: {
+                          type: 'plain_text',
+                          text: ':pencil2:    Edit',
+                          emoji: true,
+                        },
+                        value: 'edit',
+                      },
+                      {
+                        text: {
+                          type: 'plain_text',
+                          text: ':x:    Remove',
+                          emoji: true,
+                        },
+                        value: 'remove',
+                      },
+                    ],
+                    action_id: 'pick_restaurant_list-action',
+                  },
+                },
+                {
+                  block_id: `context_${restaurant.id}`,
+                  type: 'context',
+                  elements: [
+                    {
+                      type: 'mrkdwn',
+                      text: `:anchor: Weight: *${restaurant.weight}*`,
                     },
                     {
-                      text: {
-                        type: 'plain_text',
-                        text: ':x:    Remove',
-                        emoji: true,
-                      },
-                      value: 'remove',
+                      type: 'mrkdwn',
+                      text: `:bulb: Shown Count: *${restaurant.shown_count}*`,
+                    },
+                    {
+                      type: 'mrkdwn',
+                      text: `:100: Win Rate: *${
+                        restaurant.shown_count > 0
+                          ? (
+                              (restaurant.win_count / restaurant.shown_count) *
+                              100
+                            ).toFixed(0)
+                          : 0
+                      }%*`,
                     },
                   ],
-                  action_id: 'pick_restaurant_list-action',
                 },
-              },
-              {
-                block_id: `context_${restaurant.id}`,
-                type: 'context',
-                elements: [
-                  {
-                    type: 'mrkdwn',
-                    text: `:anchor: Weight: *${restaurant.weight}*`,
-                  },
-                  {
-                    type: 'mrkdwn',
-                    text: `:bulb: Shown Count: *${restaurant.shown_count}*`,
-                  },
-                  {
-                    type: 'mrkdwn',
-                    text: `:100: Win Rate: *${
-                      restaurant.shown_count > 0
-                        ? (
-                            (restaurant.win_count / restaurant.shown_count) *
-                            100
-                          ).toFixed(0)
-                        : 0
-                    }%*`,
-                  },
-                ],
-              },
-            ];
-          }),
-      ],
-    },
-  });
+              ];
+            }),
+        ],
+      },
+    }
+  );
   if (response.ok !== true || response.data.ok !== true) {
-    console.error('Failed opening new modal');
+    console.error('Failed opening list modal');
     console.log(JsonKit.stringify(response.data));
     return status(500);
   }
@@ -650,7 +684,7 @@ async function pick_restaurant_pick_vote(
     message_ts
   );
   if (pick_message == null) {
-    console.error('Failed retriving action source pick message');
+    console.error('Failed retrieving action source pick message');
     return status(500);
   }
 
@@ -1192,6 +1226,125 @@ async function handle_interaction(payload) {
         }
       }
     }
+    case 'pick_restaurant-edit': {
+      switch (payload.type) {
+        case 'view_submission': {
+          const restaurant_name =
+            payload.view.state.values['restaurant_name-block'][
+              'restaurant_name-action'
+            ].value;
+          if (typeof restaurant_name !== 'string') {
+            return json(
+              {
+                response_action: 'errors',
+                errors: {
+                  'restaurant_name-block': 'Name is invalid!',
+                },
+              },
+              { status: 200 }
+            );
+          }
+          const restaruant_weight = Number.parseInt(
+            payload.view.state.values['restaurant_weight-block'][
+              'restaurant_weight-action'
+            ].value,
+            10
+          );
+          if (typeof restaruant_weight !== 'number' || restaruant_weight < 0) {
+            return json(
+              {
+                response_action: 'errors',
+                errors: {
+                  'restaurant_weight-block': 'Please enter a positive integer!',
+                },
+              },
+              { status: 200 }
+            );
+          }
+
+          const {
+            conversation,
+            list_view,
+            data_ts,
+            restaurant_id,
+          } = JsonKit.parse(payload.view.private_metadata);
+          let bookmark = await pick_restaurant_get_url(conversation);
+          if (bookmark == null) {
+            await pick_restaurant_setup(conversation, true);
+            bookmark = await pick_restaurant_get_url(conversation);
+            if (bookmark == null) {
+              console.error('Failed getting bookmark');
+              console.log(JsonKit.stringify(payload));
+              return status(500);
+            }
+          }
+
+          const data = JsonKit.parse(bookmark.link.searchParams.get('data'));
+          if (!pick_restaurant_validate_data(conversation, data)) {
+            // TODO: call pick_restaurant_repair
+            console.error('Invalid bookmark data');
+            return status(500);
+          }
+
+          if (data.ts > data_ts) {
+            console.error('Dirty write detected');
+            return json(
+              {
+                response_action: 'errors',
+                errors: {
+                  'restaurant_name-block':
+                    'Data has been modified by another user!',
+                },
+              },
+              { status: 200 }
+            );
+          }
+
+          const restaurant_idx = data.list.findIndex(
+            r => r.id === restaurant_id
+          );
+          if (restaurant_idx < 0) {
+            return json(
+              {
+                response_action: 'errors',
+                errors: {
+                  'restaurant_name-block':
+                    'This restaurant has been removed by another user!',
+                },
+              },
+              { status: 200 }
+            );
+          }
+
+          data.list[restaurant_idx].name = restaurant_name;
+          data.list[restaurant_idx].weight = restaruant_weight;
+
+          // update bookmark
+          data.ts = Date.now();
+          const data_str = JsonKit.stringify(data, {
+            extended: false,
+            minify: false,
+            compress: true,
+          });
+          const response = await send_slack_request('POST', '/bookmarks.edit', {
+            channel_id: conversation,
+            bookmark_id: bookmark.id,
+            link: `${APP_ENDPOINT}/?conversation=${conversation}&data=${data_str}`,
+          });
+          if (response.ok !== true || response.data.ok !== true) {
+            console.error('Failed editing bookmark in conversation after edit');
+            console.log(JsonKit.stringify(response.data));
+            return status(500);
+          }
+          return await pick_restaurant_list(conversation, list_view, true);
+        }
+        default: {
+          console.error('Received unknown interaction type');
+          console.log(JsonKit.stringify(payload));
+          break;
+        }
+      }
+    }
     case 'pick_restaurant-pick_overwrite': {
       switch (payload.type) {
         case 'view_submission': {
@@ -1227,7 +1380,7 @@ async function handle_interaction(payload) {
             message_ts
           );
           if (pick_message == null) {
-            console.error('Failed retriving action source pick message');
+            console.error('Failed retrieving action source pick message');
             return status(500);
           }
 
@@ -1320,15 +1473,15 @@ async function handle_interaction(payload) {
     default: {
       switch (payload.type) {
         case 'block_actions': {
-          const conversation_id = (payload.channel != null) ? payload.channel.id : null;
-          const message_ts = (payload.message != null) ? payload.message.ts : null;
+          const conversation_id =
+            payload.channel != null ? payload.channel.id : null;
+          const message_ts =
+            payload.message != null ? payload.message.ts : null;
+          const view_id = payload.view != null ? payload.view.id : null;
           const user_id = payload.user.id;
           const trigger_id = payload.trigger_id;
 
-          if (
-            !Array.isArray(payload.actions) ||
-            typeof user_id !== 'string'
-          ) {
+          if (!Array.isArray(payload.actions) || typeof user_id !== 'string') {
             return status(400);
           }
 
@@ -1336,7 +1489,7 @@ async function handle_interaction(payload) {
             switch (action.action_id) {
               case 'pick_restaurant_pick_vote-action': {
                 if (
-                  typeof conversation_id !== 'string' || 
+                  typeof conversation_id !== 'string' ||
                   typeof message_ts !== 'string'
                 ) {
                   return status(400);
@@ -1352,7 +1505,7 @@ async function handle_interaction(payload) {
               }
               case 'pick_restaurant_pick_add_choice-action': {
                 if (
-                  typeof conversation_id !== 'string' || 
+                  typeof conversation_id !== 'string' ||
                   typeof message_ts !== 'string'
                 ) {
                   return status(400);
@@ -1362,7 +1515,7 @@ async function handle_interaction(payload) {
                   message_ts
                 );
                 if (pick_message == null) {
-                  console.error('Failed retriving action source pick message');
+                  console.error('Failed retrieving action source pick message');
                   return status(500);
                 }
 
@@ -1491,7 +1644,7 @@ async function handle_interaction(payload) {
               }
               case 'pick_restaurant_pick_end-action': {
                 if (
-                  typeof conversation_id !== 'string' || 
+                  typeof conversation_id !== 'string' ||
                   typeof message_ts !== 'string'
                 ) {
                   return status(400);
@@ -1545,7 +1698,192 @@ async function handle_interaction(payload) {
                 return status(200);
               }
               case 'pick_restaurant_list-action': {
-                // TODO: handle edit and remove
+                switch (action.type) {
+                  case 'overflow': {
+                    const private_metadata = JsonKit.parse(
+                      payload.view.private_metadata
+                    );
+                    const conversation = private_metadata.conversation;
+                    const data = JsonKit.parse(private_metadata.data);
+                    const restaurant_id = action.block_id;
+                    const restaurant = data.list.find(
+                      r => r.id === restaurant_id
+                    );
+                    if (restaurant == null) {
+                      console.error(
+                        'Restaurant not found for pick_restaurant_list-action'
+                      );
+                      return status(500);
+                    }
+                    switch (action.selected_option.value) {
+                      case 'edit': {
+                        const response = await send_slack_request(
+                          'POST',
+                          '/views.push',
+                          {
+                            trigger_id,
+                            view: {
+                              type: 'modal',
+                              title: {
+                                type: 'plain_text',
+                                text: 'Edit Restarurant',
+                                emoji: true,
+                              },
+                              close: {
+                                type: 'plain_text',
+                                text: 'Cancel',
+                                emoji: true,
+                              },
+                              submit: {
+                                type: 'plain_text',
+                                text: 'Save',
+                                emoji: true,
+                              },
+                              private_metadata: JsonKit.stringify({
+                                conversation: conversation,
+                                list_view: view_id,
+                                data_ts: data.ts,
+                                restaurant_id,
+                              }),
+                              callback_id: 'pick_restaurant-edit',
+                              blocks: [
+                                {
+                                  block_id: 'restaurant_name-block',
+                                  type: 'input',
+                                  element: {
+                                    type: 'plain_text_input',
+                                    action_id: 'restaurant_name-action',
+                                    placeholder: {
+                                      type: 'plain_text',
+                                      text: 'Name of Restaurant',
+                                    },
+                                    initial_value: restaurant.name,
+                                    min_length: 2,
+                                    max_length: 30,
+                                  },
+                                  label: {
+                                    type: 'plain_text',
+                                    text: 'Name',
+                                  },
+                                },
+                                {
+                                  block_id: 'restaurant_weight-block',
+                                  type: 'input',
+                                  element: {
+                                    type: 'number_input',
+                                    action_id: 'restaurant_weight-action',
+                                    is_decimal_allowed: false,
+                                    placeholder: {
+                                      type: 'plain_text',
+                                      text: 'Weight (0 [disabled] - 99)',
+                                    },
+                                    initial_value: restaurant.weight.toString(),
+                                    min_value: '0',
+                                    max_value: '99',
+                                    focus_on_load: true,
+                                  },
+                                  label: {
+                                    type: 'plain_text',
+                                    text: 'Weight',
+                                  },
+                                },
+                              ],
+                            },
+                          }
+                        );
+                        if (response.ok !== true || response.data.ok !== true) {
+                          console.error('Failed opening edit modal');
+                          console.log(JsonKit.stringify(response.data));
+                          return status(500);
+                        }
+                        return status(200);
+                      }
+                      case 'remove': {
+                        const private_metadata = JsonKit.parse(
+                          payload.view.private_metadata
+                        );
+                        const conversation = private_metadata.conversation;
+                        let bookmark = await pick_restaurant_get_url(
+                          conversation
+                        );
+                        if (bookmark == null) {
+                          await pick_restaurant_setup(conversation, true);
+                          bookmark = await pick_restaurant_get_url(
+                            conversation
+                          );
+                          if (bookmark == null) {
+                            console.error('Failed getting bookmark');
+                            console.log(JsonKit.stringify(payload));
+                            return status(500);
+                          }
+                        }
+
+                        const data = JsonKit.parse(
+                          bookmark.link.searchParams.get('data')
+                        );
+                        if (
+                          !pick_restaurant_validate_data(conversation, data)
+                        ) {
+                          // TODO: call pick_restaurant_repair
+                          console.error('Invalid bookmark data');
+                          return status(500);
+                        }
+
+                        const restaurant_idx = data.list.findIndex(
+                          r => r.id === restaurant_id
+                        );
+                        if (restaurant_idx < 0) {
+                          return status(200);
+                        }
+
+                        data.list.splice(restaurant_idx, 1);
+
+                        // update bookmark
+                        data.ts = Date.now();
+                        const data_str = JsonKit.stringify(data, {
+                          extended: false,
+                          minify: false,
+                          compress: true,
+                        });
+                        const response = await send_slack_request(
+                          'POST',
+                          '/bookmarks.edit',
+                          {
+                            channel_id: conversation,
+                            bookmark_id: bookmark.id,
+                            link: `${APP_ENDPOINT}/?conversation=${conversation}&data=${data_str}`,
+                          }
+                        );
+                        if (response.ok !== true || response.data.ok !== true) {
+                          console.error(
+                            'Failed editing bookmark in conversation after edit'
+                          );
+                          console.log(JsonKit.stringify(response.data));
+                          return status(500);
+                        }
+                        return await pick_restaurant_list(
+                          conversation,
+                          view_id,
+                          true
+                        );
+                      }
+                      default: {
+                        console.error(
+                          'Received unknown block action overflow selected option interaction payload'
+                        );
+                        console.log(JsonKit.stringify(payload));
+                        return status(400);
+                      }
+                    }
+                  }
+                  default: {
+                    console.error(
+                      'Received unknown block action type interaction payload'
+                    );
+                    console.log(JsonKit.stringify(payload));
+                    return status(400);
+                  }
+                }
               }
               default: {
                 console.error(
