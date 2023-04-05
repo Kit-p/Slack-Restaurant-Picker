@@ -98,6 +98,18 @@ function pick_restaurant_get_pick_message_payload(
     .map(c => `"${c.name}"`)
     .join(', ')}]`;
 
+  const max_vote = choices_to_show.reduce(
+    (max, choice) => Math.max(max, choice.votes.length),
+    0
+  );
+  let winners = choices_to_show.filter(
+    choice => choice.votes.length === max_vote
+  );
+  for (const winner of winners) {
+    winner.win_count++;
+  }
+  winners = winners.map(winner => winner.id);
+
   return {
     channel: conversation,
     metadata: {
@@ -106,6 +118,7 @@ function pick_restaurant_get_pick_message_payload(
         conversation,
         choices,
         number_of_choices,
+        winners,
         ts: Date.now(),
       },
     },
@@ -127,7 +140,9 @@ function pick_restaurant_get_pick_message_payload(
           type: 'section',
           text: {
             type: 'mrkdwn',
-            text: `:knife_fork_plate: *${choice.name}*`,
+            text: `${
+              winners.includes(choice.id) ? ':fire: ' : ''
+            }:knife_fork_plate: *${choice.name}*`,
           },
           accessory: {
             type: 'button',
@@ -425,11 +440,12 @@ async function pick_restaurant_pick(conversation, number_of_choices) {
   const choices_to_show = choices.slice(0, number_of_choices);
   for (const choice of choices_to_show) {
     choice.shown_count++;
+    choice.win_count++;
   }
 
   const message_payload = pick_restaurant_get_pick_message_payload(
     conversation,
-    choices.map(c => ({ ...c, votes: [] })),
+    choices.map(c => ({ ...c, win_count: c.win_count - 1, votes: [] })),
     number_of_choices
   );
   let response = await send_slack_request(
@@ -520,7 +536,7 @@ async function pick_restaurant_pick_vote(
             text: {
               type: 'mrkdwn',
               text:
-                'You have already voted!\nDo you want to *overwrite* your previous vote?',
+                '*You have already voted!*\n\nDo you want to *overwrite* your previous vote?',
             },
           },
         ],
@@ -537,6 +553,9 @@ async function pick_restaurant_pick_vote(
   }
 
   for (const choice of pick_metadata.event_payload.choices) {
+    if (pick_metadata.event_payload.winners.includes(choice.id)) {
+      choice.win_count--;
+    }
     if (is_overwrite) {
       for (let i = 0; i < choice.votes.length; i++) {
         if (choice.votes[i].user_id === user_id) {
@@ -559,14 +578,46 @@ async function pick_restaurant_pick_vote(
     pick_metadata.event_payload.choices,
     pick_metadata.event_payload.number_of_choices
   );
-  const response = await send_slack_request('POST', '/chat.update', {
+  let response = await send_slack_request('POST', '/chat.update', {
     ts: message_ts,
     ...message_payload,
   });
   if (response.ok !== true || response.data.ok !== true) {
-    console.error('Failed updating pick message in conversation');
+    console.error('Failed updating pick message to add vote in conversation');
     console.log(JsonKit.stringify(response.data));
     return status(500);
+  }
+
+  const bookmark = await pick_restaurant_get_url(conversation);
+  if (bookmark != null) {
+    const data = JsonKit.parse(bookmark.link.searchParams.get('data'));
+    for (const restaurant of data.list) {
+      if (pick_metadata.event_payload.winners.includes(restaurant.id)) {
+        restaurant.win_count--;
+      }
+      if (
+        message_payload.metadata.event_payload.winners.includes(restaurant.id)
+      ) {
+        restaurant.win_count++;
+      }
+    }
+
+    // update bookmark
+    data.ts = Date.now();
+    const data_str = JsonKit.stringify(data, {
+      extended: false,
+      minify: false,
+      compress: true,
+    });
+    response = await send_slack_request('POST', '/bookmarks.edit', {
+      channel_id: conversation,
+      bookmark_id: bookmark.id,
+      link: `${APP_ENDPOINT}/?conversation=${conversation}&data=${data_str}`,
+    });
+    if (response.ok !== true || response.data.ok !== true) {
+      console.error('Failed editing bookmark in conversation after pick vote');
+      console.log(JsonKit.stringify(response.data));
+    }
   }
   return status(200);
 }
@@ -696,7 +747,7 @@ async function handle_event(event) {
               number_of_choices
             );
 
-            await selected_conversation('POST', '/workflows.stepCompleted', {
+            await send_slack_request('POST', '/workflows.stepCompleted', {
               workflow_step_execute_id:
                 event.workflow_step.workflow_step_execute_id,
             });
@@ -735,7 +786,7 @@ async function handle_interaction(payload) {
   let callback_id = null;
   try {
     callback_id = payload.callback_id || payload.view.callback_id;
-  } catch (ignored) { }
+  } catch (ignored) {}
 
   switch (callback_id) {
     case 'pick_restaurant': {
@@ -1053,7 +1104,111 @@ async function handle_interaction(payload) {
                 );
               }
               case 'pick_restaurant_pick_add_choice-action': {
-                // TODO
+                const pick_message = await pick_restaurant_get_pick_message(
+                  conversation_id,
+                  message_ts
+                );
+                if (pick_message == null) {
+                  console.error('Failed retriving action source pick message');
+                  return status(500);
+                }
+
+                const pick_metadata = pick_message.metadata;
+                const last_choice =
+                  pick_metadata.event_payload.number_of_choices;
+                if (last_choice >= pick_metadata.event_payload.choices.length) {
+                  const response = await send_slack_request(
+                    'POST',
+                    '/chat.postEphemeral',
+                    {
+                      channel: conversation_id,
+                      text: 'No more restaurants to pick!',
+                      blocks: [
+                        {
+                          type: 'section',
+                          text: {
+                            type: 'mrkdwn',
+                            text:
+                              '*There are no more restaurants to pick.*\n\nPlease add new ones and start another pick!',
+                          },
+                        },
+                      ],
+                      user: user_id,
+                    }
+                  );
+                  if (response.ok !== true || response.data.ok !== true) {
+                    console.error(
+                      `Failed sending error empheral (user: ${user_id}) message to conversation`
+                    );
+                    console.log(JsonKit.stringify(response.data));
+                    return status(500);
+                  }
+                  return status(200);
+                }
+
+                pick_metadata.event_payload.choices[last_choice].shown_count++;
+                pick_metadata.event_payload.number_of_choices = last_choice + 1;
+                pick_metadata.event_payload.ts = Date.now();
+
+                const message_payload = pick_restaurant_get_pick_message_payload(
+                  conversation_id,
+                  pick_metadata.event_payload.choices,
+                  pick_metadata.event_payload.number_of_choices
+                );
+                let response = await send_slack_request(
+                  'POST',
+                  '/chat.update',
+                  {
+                    ts: message_ts,
+                    ...message_payload,
+                  }
+                );
+                if (response.ok !== true || response.data.ok !== true) {
+                  console.error(
+                    'Failed updating pick message to add choice in conversation'
+                  );
+                  console.log(JsonKit.stringify(response.data));
+                  return status(500);
+                }
+
+                const bookmark = await pick_restaurant_get_url(conversation_id);
+                if (bookmark != null) {
+                  const data = JsonKit.parse(
+                    bookmark.link.searchParams.get('data')
+                  );
+                  const restaurant = data.list.find(
+                    restaurant =>
+                      restaurant.id ===
+                      pick_metadata.event_payload.choices[last_choice].id
+                  );
+                  if (restaurant != null) {
+                    restaurant.shown_count++;
+                  }
+
+                  // update bookmark
+                  data.ts = Date.now();
+                  const data_str = JsonKit.stringify(data, {
+                    extended: false,
+                    minify: false,
+                    compress: true,
+                  });
+                  response = await send_slack_request(
+                    'POST',
+                    '/bookmarks.edit',
+                    {
+                      channel_id: conversation_id,
+                      bookmark_id: bookmark.id,
+                      link: `${APP_ENDPOINT}/?conversation=${conversation_id}&data=${data_str}`,
+                    }
+                  );
+                  if (response.ok !== true || response.data.ok !== true) {
+                    console.error(
+                      'Failed editing bookmark in conversation after pick'
+                    );
+                    console.log(JsonKit.stringify(response.data));
+                  }
+                }
+                return status(200);
               }
               default: {
                 console.error(
@@ -1173,10 +1328,14 @@ router.get('/', async req => {
             <td>${restaurant.name}</td>
             <td>${restaurant.weight}</td>
             <td>${restaurant.shown_count}</td>
-            <td>${(
-              (restaurant.win_count / restaurant.shown_count) *
-              100
-            ).toFixed(0)}%</td>
+            <td>${
+              restaurant.shown_count > 0
+                ? (
+                    (restaurant.win_count / restaurant.shown_count) *
+                    100
+                  ).toFixed(0)
+                : 0
+            }%</td>
           </tr>
       `
         )
