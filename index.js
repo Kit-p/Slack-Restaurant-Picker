@@ -370,7 +370,127 @@ async function pick_restaurant_help(conversation, user_id) {
 }
 
 async function pick_restaurant_list(conversation, trigger_id) {
-  // TODO: render list and allow edit / remove
+  let bookmark = await pick_restaurant_get_url(conversation);
+  if (bookmark == null) {
+    await pick_restaurant_setup(conversation, true);
+    bookmark = await pick_restaurant_get_url(conversation);
+    if (bookmark == null) {
+      console.error('Failed getting bookmark');
+      console.log(JsonKit.stringify(payload));
+      return status(500);
+    }
+  }
+
+  const data = JsonKit.parse(bookmark.link.searchParams.get('data'));
+  if (!pick_restaurant_validate_data(conversation, data)) {
+    // TODO: call pick_restaurant_repair
+    console.error('Invalid bookmark data');
+    return status(500);
+  }
+
+  const response = await send_slack_request('POST', '/views.open', {
+    trigger_id,
+    view: {
+      type: 'modal',
+      title: {
+        type: 'plain_text',
+        text: 'Restaurant List',
+        emoji: true,
+      },
+      close: {
+        type: 'plain_text',
+        text: 'Close',
+        emoji: true,
+      },
+      submit: {
+        type: 'plain_text',
+        text: 'Done',
+        emoji: true,
+      },
+      private_metadata: JsonKit.stringify({
+        conversation,
+        data_ts: data.ts,
+      }),
+      callback_id: 'pick_restaurant-list',
+      blocks: [
+        ...data.list
+          .sort((a, b) => {
+            if (a.win_count !== b.win_count) {
+              return b.win_count - a.win_count;
+            }
+            if (a.shown_count !== b.shown_count) {
+              return a.shown_count - b.shown_count;
+            }
+            return b.weight - a.weight;
+          })
+          .flatMap(restaurant => {
+            return [
+              {
+                block_id: restaurant.id,
+                type: 'section',
+                text: {
+                  type: 'mrkdwn',
+                  text: `:knife_fork_plate: *${restaurant.name}*`,
+                },
+                accessory: {
+                  type: 'overflow',
+                  options: [
+                    {
+                      text: {
+                        type: 'plain_text',
+                        text: ':pencil2:    Edit',
+                        emoji: true,
+                      },
+                      value: 'edit',
+                    },
+                    {
+                      text: {
+                        type: 'plain_text',
+                        text: ':x:    Remove',
+                        emoji: true,
+                      },
+                      value: 'remove',
+                    },
+                  ],
+                  action_id: 'pick_restaurant_list-action',
+                },
+              },
+              {
+                block_id: `context_${restaurant.id}`,
+                type: 'context',
+                elements: [
+                  {
+                    type: 'mrkdwn',
+                    text: `:anchor: Weight: *${restaurant.weight}*`,
+                  },
+                  {
+                    type: 'mrkdwn',
+                    text: `:bulb: Shown Count: *${restaurant.shown_count}*`,
+                  },
+                  {
+                    type: 'mrkdwn',
+                    text: `:100: Win Rate: *${
+                      restaurant.shown_count > 0
+                        ? (
+                            (restaurant.win_count / restaurant.shown_count) *
+                            100
+                          ).toFixed(0)
+                        : 0
+                    }%*`,
+                  },
+                ],
+              },
+            ];
+          }),
+      ],
+    },
+  });
+  if (response.ok !== true || response.data.ok !== true) {
+    console.error('Failed opening new modal');
+    console.log(JsonKit.stringify(response.data));
+    return status(500);
+  }
+  return status(200);
 }
 
 async function pick_restaurant_new(conversation, trigger_id) {
@@ -443,7 +563,7 @@ async function pick_restaurant_new(conversation, trigger_id) {
   if (response.ok !== true || response.data.ok !== true) {
     console.error('Failed opening new modal');
     console.log(JsonKit.stringify(response.data));
-    return status(400);
+    return status(500);
   }
   return status(200);
 }
@@ -899,7 +1019,7 @@ async function handle_interaction(payload) {
           if (response.ok !== true || response.data.ok !== true) {
             console.error('Failed opening config modal');
             console.log(JsonKit.stringify(response.data));
-            return status(400);
+            return status(500);
           }
           return status(200);
         }
@@ -1200,15 +1320,13 @@ async function handle_interaction(payload) {
     default: {
       switch (payload.type) {
         case 'block_actions': {
-          const conversation_id = payload.channel.id;
-          const message_ts = payload.message.ts;
+          const conversation_id = (payload.channel != null) ? payload.channel.id : null;
+          const message_ts = (payload.message != null) ? payload.message.ts : null;
           const user_id = payload.user.id;
           const trigger_id = payload.trigger_id;
 
           if (
             !Array.isArray(payload.actions) ||
-            typeof conversation_id !== 'string' ||
-            typeof message_ts !== 'string' ||
             typeof user_id !== 'string'
           ) {
             return status(400);
@@ -1217,6 +1335,12 @@ async function handle_interaction(payload) {
           for (const action of payload.actions) {
             switch (action.action_id) {
               case 'pick_restaurant_pick_vote-action': {
+                if (
+                  typeof conversation_id !== 'string' || 
+                  typeof message_ts !== 'string'
+                ) {
+                  return status(400);
+                }
                 const restaurant_id = action.value;
                 return await pick_restaurant_pick_vote(
                   conversation_id,
@@ -1227,6 +1351,12 @@ async function handle_interaction(payload) {
                 );
               }
               case 'pick_restaurant_pick_add_choice-action': {
+                if (
+                  typeof conversation_id !== 'string' || 
+                  typeof message_ts !== 'string'
+                ) {
+                  return status(400);
+                }
                 const pick_message = await pick_restaurant_get_pick_message(
                   conversation_id,
                   message_ts
@@ -1331,9 +1461,41 @@ async function handle_interaction(payload) {
                     console.log(JsonKit.stringify(response.data));
                   }
                 }
+
+                const voted_users = [
+                  ...new Set(
+                    pick_metadata.event_payload.choices.flatMap(c =>
+                      c.votes.map(v => v.user_id)
+                    )
+                  ),
+                ];
+                for (const user of voted_users) {
+                  response = await send_slack_request(
+                    'POST',
+                    '/chat.postEphemeral',
+                    {
+                      channel: conversation_id,
+                      text: `<@${user}> A new choice has been added! You may consider changing your vote.`,
+                      user: user,
+                    }
+                  );
+                  if (response.ok !== true || response.data.ok !== true) {
+                    console.error(
+                      `Failed sending new choice notification empheral (user: ${user}) message to conversation`
+                    );
+                    console.log(JsonKit.stringify(response.data));
+                  }
+                }
+
                 return status(200);
               }
               case 'pick_restaurant_pick_end-action': {
+                if (
+                  typeof conversation_id !== 'string' || 
+                  typeof message_ts !== 'string'
+                ) {
+                  return status(400);
+                }
                 const response = await send_slack_request(
                   'POST',
                   '/views.open',
@@ -1381,6 +1543,9 @@ async function handle_interaction(payload) {
                   return status(500);
                 }
                 return status(200);
+              }
+              case 'pick_restaurant_list-action': {
+                // TODO: handle edit and remove
               }
               default: {
                 console.error(
@@ -1498,7 +1663,10 @@ router.get('/', async req => {
           if (a.win_count !== b.win_count) {
             return b.win_count - a.win_count;
           }
-          return a.shown_count - b.shown_count;
+          if (a.shown_count !== b.shown_count) {
+            return a.shown_count - b.shown_count;
+          }
+          return b.weight - a.weight;
         })
         .map(
           restaurant => `
