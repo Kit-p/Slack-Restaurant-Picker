@@ -10,12 +10,22 @@ const SLACK_API_ROOT = 'https://slack.com/api';
 
 /* Utility Functions */
 async function send_slack_request(method, path, data) {
-  const url = `${SLACK_API_ROOT}${path}`;
+  let url = `${SLACK_API_ROOT}${path}`;
+  if (data.params != null) {
+    url +=
+      '?' +
+      Object.entries(data.params)
+        .map(([k, v]) => `${k}=${encodeURIComponent(v)}`)
+        .join('&');
+  }
   console.log(`[${method}]: ${url}`);
 
   const response = await fetch(url, {
     method: method,
-    body: JsonKit.stringify(data),
+    body:
+      method !== 'GET' && method !== 'HEAD' && data.params === undefined
+        ? JsonKit.stringify(data)
+        : undefined,
     headers: {
       Authorization: `Bearer ${BOT_ACCESS_TOKEN}`,
       'Content-Type': 'application/json; charset=utf-8',
@@ -78,6 +88,99 @@ function pick_restaurant_get_help_block() {
   };
 }
 
+function pick_restaurant_get_pick_message_payload(
+  conversation,
+  choices,
+  number_of_choices
+) {
+  const choices_to_show = choices.slice(0, number_of_choices);
+  const fallback_text = `Pick a restaurant from one of [${choices_to_show
+    .map(c => `"${c.name}"`)
+    .join(', ')}]`;
+
+  return {
+    channel: conversation,
+    metadata: {
+      event_type: 'restaurant_picker-pick',
+      event_payload: {
+        conversation,
+        choices,
+        number_of_choices,
+        ts: Date.now(),
+      },
+    },
+    text: fallback_text,
+    blocks: [
+      {
+        type: 'section',
+        text: {
+          type: 'mrkdwn',
+          text: 'Hey, I have picked these restaurants for you!',
+        },
+      },
+      {
+        type: 'divider',
+      },
+      ...choices_to_show.flatMap(choice => [
+        {
+          block_id: `restaurant_${choice.id}-block`,
+          type: 'section',
+          text: {
+            type: 'mrkdwn',
+            text: `:knife_fork_plate: *${choice.name}*`,
+          },
+          accessory: {
+            type: 'button',
+            text: {
+              type: 'plain_text',
+              text: 'Vote',
+              emoji: true,
+            },
+            action_id: 'pick_restaurant_pick_vote-action',
+            value: choice.id,
+          },
+        },
+        {
+          block_id: `votes_${choice.id}-block`,
+          type: 'context',
+          elements: [
+            {
+              type: 'plain_text',
+              text: 'Vote: ',
+              emoji: true,
+            },
+            ...choice.votes.map(() => {
+              return {
+                type: 'plain_text',
+                text: ':white_check_mark:',
+                emoji: true,
+              };
+            }),
+          ],
+        },
+      ]),
+      {
+        type: 'divider',
+      },
+      {
+        type: 'actions',
+        elements: [
+          {
+            type: 'button',
+            text: {
+              type: 'plain_text',
+              text: 'Add 1 more choice :see_no_evil:',
+              emoji: true,
+            },
+            action_id: 'pick_restaurant_pick_add_choice-action',
+            value: `add_choice`,
+          },
+        ],
+      },
+    ],
+  };
+}
+
 async function pick_restaurant_get_url(conversation) {
   const response = await send_slack_request('POST', '/bookmarks.list', {
     channel_id: conversation,
@@ -108,6 +211,28 @@ async function pick_restaurant_get_url(conversation) {
 
   bookmark.link = new URL(bookmark.link);
   return bookmark;
+}
+
+async function pick_restaurant_get_pick_message(conversation, message_ts) {
+  const response = await send_slack_request('GET', '/conversations.history', {
+    params: {
+      channel: conversation,
+      oldest: message_ts,
+      inclusive: true,
+      limit: 1,
+      include_all_metadata: true,
+    },
+  });
+  if (response.ok !== true || response.data.ok !== true) {
+    console.error('Failed retrieving conversation pick message');
+    console.log(JsonKit.stringify(response.data));
+    return null;
+  }
+
+  if (response.data.messages == null || response.data.messages.length !== 1) {
+    return null;
+  }
+  return response.data.messages[0];
 }
 
 async function pick_restaurant_setup(conversation, slient) {
@@ -302,81 +427,16 @@ async function pick_restaurant_pick(conversation, number_of_choices) {
     choice.shown_count++;
   }
 
-  const fallback_text = `Pick a restaurant from one of [${choices_to_show
-    .map(c => `"${c.name}"`)
-    .join(', ')}]`;
-
-  let response = await send_slack_request('POST', '/chat.postMessage', {
-    channel: conversation,
-    metadata: {
-      event_type: 'restaurant_picker-pick',
-      event_payload: {
-        conversation: conversation,
-        choices: choices.map(c => ({ ...c, votes: [] })),
-        number_of_choices,
-      },
-    },
-    text: fallback_text,
-    blocks: [
-      {
-        type: 'section',
-        text: {
-          type: 'mrkdwn',
-          text: 'Hey, I have picked these restaurants for you!',
-        },
-      },
-      {
-        type: 'divider',
-      },
-      ...choices_to_show.flatMap(choice => [
-        {
-          type: 'section',
-          text: {
-            type: 'mrkdwn',
-            text: `:knife_fork_plate: *${choice.name}*`,
-          },
-          accessory: {
-            type: 'button',
-            text: {
-              type: 'plain_text',
-              text: 'Vote',
-              emoji: true,
-            },
-            action_id: 'pick_restaurant_pick_vote-action',
-            value: choice.id,
-          },
-        },
-        {
-          type: 'context',
-          elements: [
-            {
-              type: 'plain_text',
-              text: 'Vote: ',
-              emoji: true,
-            },
-          ],
-        },
-      ]),
-      {
-        type: 'divider',
-      },
-      {
-        type: 'actions',
-        elements: [
-          {
-            type: 'button',
-            text: {
-              type: 'plain_text',
-              text: 'Add 1 more choice :see_no_evil:',
-              emoji: true,
-            },
-            action_id: 'pick_restaurant_pick_add_choice-action',
-            value: `add_choice`,
-          },
-        ],
-      },
-    ],
-  });
+  const message_payload = pick_restaurant_get_pick_message_payload(
+    conversation,
+    choices.map(c => ({ ...c, votes: [] })),
+    number_of_choices
+  );
+  let response = await send_slack_request(
+    'POST',
+    '/chat.postMessage',
+    message_payload
+  );
   if (response.ok !== true || response.data.ok !== true) {
     console.error('Failed sending pick message to conversation');
     console.log(JsonKit.stringify(response.data));
@@ -384,6 +444,7 @@ async function pick_restaurant_pick(conversation, number_of_choices) {
   }
 
   // update bookmark
+  data.ts = Date.now();
   const data_str = JsonKit.stringify(data, {
     extended: false,
     minify: false,
@@ -396,6 +457,114 @@ async function pick_restaurant_pick(conversation, number_of_choices) {
   });
   if (response.ok !== true || response.data.ok !== true) {
     console.error('Failed editing bookmark in conversation after pick');
+    console.log(JsonKit.stringify(response.data));
+    return status(500);
+  }
+  return status(200);
+}
+
+async function pick_restaurant_pick_vote(
+  conversation,
+  message_ts,
+  user_id,
+  restaurant_id,
+  trigger_id
+) {
+  const pick_message = await pick_restaurant_get_pick_message(
+    conversation,
+    message_ts
+  );
+  if (pick_message == null) {
+    console.error('Failed retriving action source pick message');
+    return status(500);
+  }
+
+  const is_overwrite = trigger_id == null;
+  const pick_metadata = pick_message.metadata;
+  if (
+    !is_overwrite &&
+    pick_metadata.event_payload.choices.some(c =>
+      c.votes.some(v => v.user_id === user_id)
+    )
+  ) {
+    // user already voted
+    const response = await send_slack_request('POST', '/views.open', {
+      trigger_id,
+      view: {
+        type: 'modal',
+        title: {
+          type: 'plain_text',
+          text: 'Duplicated Vote',
+          emoji: true,
+        },
+        close: {
+          type: 'plain_text',
+          text: 'No',
+          emoji: true,
+        },
+        submit: {
+          type: 'plain_text',
+          text: 'Yes',
+          emoji: true,
+        },
+        private_metadata: JsonKit.stringify({
+          conversation,
+          message_ts,
+          user_id,
+          restaurant_id,
+        }),
+        callback_id: 'pick_restaurant-pick_overwrite',
+        blocks: [
+          {
+            type: 'section',
+            text: {
+              type: 'mrkdwn',
+              text:
+                'You have already voted!\nDo you want to *overwrite* your previous vote?',
+            },
+          },
+        ],
+      },
+    });
+    if (response.ok !== true || response.data.ok !== true) {
+      console.error(
+        'Failed opening duplicated vote overwrite confirmation modal'
+      );
+      console.log(JsonKit.stringify(response.data));
+      return status(500);
+    }
+    return status(200);
+  }
+
+  for (const choice of pick_metadata.event_payload.choices) {
+    if (is_overwrite) {
+      for (let i = 0; i < choice.votes.length; i++) {
+        if (choice.votes[i].user_id === user_id) {
+          choice.votes.splice(i, 1);
+          i--;
+        }
+      }
+    }
+    if (choice.id === restaurant_id) {
+      choice.votes.push({
+        user_id: user_id,
+        ts: Date.now(),
+      });
+    }
+  }
+  pick_metadata.event_payload.ts = Date.now();
+
+  const message_payload = pick_restaurant_get_pick_message_payload(
+    conversation,
+    pick_metadata.event_payload.choices,
+    pick_metadata.event_payload.number_of_choices
+  );
+  const response = await send_slack_request('POST', '/chat.update', {
+    ts: message_ts,
+    ...message_payload,
+  });
+  if (response.ok !== true || response.data.ok !== true) {
+    console.error('Failed updating pick message in conversation');
     console.log(JsonKit.stringify(response.data));
     return status(500);
   }
@@ -563,7 +732,10 @@ async function handle_event(event) {
 
 async function handle_interaction(payload) {
   console.log(JsonKit.stringify(payload));
-  const callback_id = payload.callback_id || payload.view.callback_id || null;
+  let callback_id = null;
+  try {
+    callback_id = payload.callback_id || payload.view.callback_id;
+  } catch (ignored) { }
 
   switch (callback_id) {
     case 'pick_restaurant': {
@@ -794,7 +966,6 @@ async function handle_interaction(payload) {
             );
           }
 
-          data.ts = Date.now();
           data.list.push({
             id: uuid(),
             name: restaurant_name,
@@ -804,6 +975,7 @@ async function handle_interaction(payload) {
           });
 
           // update bookmark
+          data.ts = Date.now();
           const data_str = JsonKit.stringify(data, {
             extended: false,
             minify: false,
@@ -828,12 +1000,36 @@ async function handle_interaction(payload) {
         }
       }
     }
+    case 'pick_restaurant-pick_overwrite': {
+      switch (payload.type) {
+        case 'view_submission': {
+          const {
+            conversation,
+            message_ts,
+            user_id,
+            restaurant_id,
+          } = JsonKit.parse(payload.view.private_metadata);
+          return await pick_restaurant_pick_vote(
+            conversation,
+            message_ts,
+            user_id,
+            restaurant_id
+          );
+        }
+        default: {
+          console.error('Received unknown interaction type');
+          console.log(JsonKit.stringify(payload));
+          break;
+        }
+      }
+    }
     default: {
       switch (payload.type) {
         case 'block_actions': {
           const conversation_id = payload.channel.id;
           const message_ts = payload.message.ts;
           const user_id = payload.user.id;
+          const trigger_id = payload.trigger_id;
 
           if (
             !Array.isArray(payload.actions) ||
@@ -848,7 +1044,13 @@ async function handle_interaction(payload) {
             switch (action.action_id) {
               case 'pick_restaurant_pick_vote-action': {
                 const restaurant_id = action.value;
-                // TODO
+                return await pick_restaurant_pick_vote(
+                  conversation_id,
+                  message_ts,
+                  user_id,
+                  restaurant_id,
+                  trigger_id
+                );
               }
               case 'pick_restaurant_pick_add_choice-action': {
                 // TODO
