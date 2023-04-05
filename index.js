@@ -709,7 +709,7 @@ async function handle_command(command) {
   }
 }
 
-async function handle_event(event) {
+async function handle_event(event, context) {
   console.log(JsonKit.stringify(event));
   const callback_id = event.callback_id;
   if (typeof callback_id !== 'string') {
@@ -722,45 +722,47 @@ async function handle_event(event) {
     case 'pick_restaurant': {
       switch (event.type) {
         case 'workflow_step_execute': {
-          try {
-            const selected_conversation =
-              event.workflow_step.inputs.selected_conversation.value;
-            if (typeof selected_conversation !== 'string') {
-              throw new Error(
-                'No conversation is selected, please reconfigure the workflow step.'
+          context.waitUntil((async () => {
+            try {
+              const selected_conversation =
+                event.workflow_step.inputs.selected_conversation.value;
+              if (typeof selected_conversation !== 'string') {
+                throw new Error(
+                  'No conversation is selected, please reconfigure the workflow step.'
+                );
+              }
+
+              const number_of_choices =
+                event.workflow_step.inputs.number_of_choices.value;
+              if (
+                typeof number_of_choices !== 'number' ||
+                number_of_choices <= 0
+              ) {
+                throw new Error(
+                  'Missing number of choices, please reconfigure the workflow step.'
+                );
+              }
+
+              await pick_restaurant_pick(
+                selected_conversation,
+                number_of_choices
               );
+
+              await send_slack_request('POST', '/workflows.stepCompleted', {
+                workflow_step_execute_id:
+                  event.workflow_step.workflow_step_execute_id,
+              });
+            } catch (err) {
+              console.error(err);
+              await send_slack_request('POST', '/workflows.stepFailed', {
+                workflow_step_execute_id:
+                  event.workflow_step.workflow_step_execute_id,
+                error: {
+                  message: err.message.toString(),
+                },
+              });
             }
-
-            const number_of_choices =
-              event.workflow_step.inputs.number_of_choices.value;
-            if (
-              typeof number_of_choices !== 'number' ||
-              number_of_choices <= 0
-            ) {
-              throw new Error(
-                'Missing number of choices, please reconfigure the workflow step.'
-              );
-            }
-
-            await pick_restaurant_pick(
-              selected_conversation,
-              number_of_choices
-            );
-
-            await send_slack_request('POST', '/workflows.stepCompleted', {
-              workflow_step_execute_id:
-                event.workflow_step.workflow_step_execute_id,
-            });
-          } catch (err) {
-            console.error(err);
-            await send_slack_request('POST', '/workflows.stepFailed', {
-              workflow_step_execute_id:
-                event.workflow_step.workflow_step_execute_id,
-              error: {
-                message: err.message.toString(),
-              },
-            });
-          }
+          })());
           return status(200);
         }
         default: {
@@ -1258,11 +1260,11 @@ router.post('/api/command', withData, async req => {
   return await handle_command(req.data);
 });
 
-router.post('/api/event', withData, async req => {
+router.post('/api/event', withData, async (req, event) => {
   if (req.data.challenge) {
     return text(req.data.challenge, { status: 200 });
   }
-  return await handle_event(req.data.event);
+  return await handle_event(req.data.event, event);
 });
 
 router.post('/api/interact', withData, async req => {
@@ -1352,5 +1354,5 @@ router.get('/', async req => {
 router.all('*', () => missing('Not Found'));
 
 addEventListener('fetch', e => {
-  e.respondWith(router.handle(e.request));
+  e.respondWith(router.handle(e.request, e));
 });
