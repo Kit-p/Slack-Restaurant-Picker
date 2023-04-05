@@ -91,26 +91,27 @@ function pick_restaurant_get_help_block() {
 function pick_restaurant_get_pick_message_payload(
   conversation,
   choices,
-  number_of_choices
+  number_of_choices,
+  is_ended = false,
+  ended_by = null
 ) {
   const choices_to_show = choices.slice(0, number_of_choices);
   const fallback_text = `Pick a restaurant from one of [${choices_to_show
     .map(c => `"${c.name}"`)
     .join(', ')}]`;
 
-  const max_vote = choices_to_show.reduce(
-    (max, choice) => Math.max(max, choice.votes.length),
-    0
-  );
+  let total_votes = 0;
+  let max_vote = 0;
+  for (const choice of choices_to_show) {
+    total_votes += choice.votes.length;
+    max_vote = Math.max(max_vote, choice.votes.length);
+  }
   let winners = choices_to_show.filter(
     choice => choice.votes.length === max_vote
   );
-  for (const winner of winners) {
-    winner.win_count++;
-  }
   winners = winners.map(winner => winner.id);
 
-  return {
+  const payload = {
     channel: conversation,
     metadata: {
       event_type: 'restaurant_picker-pick',
@@ -119,6 +120,8 @@ function pick_restaurant_get_pick_message_payload(
         choices,
         number_of_choices,
         winners,
+        is_ended,
+        ended_by,
         ts: Date.now(),
       },
     },
@@ -131,69 +134,105 @@ function pick_restaurant_get_pick_message_payload(
           text: 'Hey, I have picked these restaurants for you!',
         },
       },
-      {
-        type: 'divider',
-      },
-      ...choices_to_show.flatMap(choice => [
-        {
-          block_id: `restaurant_${choice.id}-block`,
-          type: 'section',
-          text: {
-            type: 'mrkdwn',
-            text: `${
-              winners.includes(choice.id) ? ':fire: ' : ''
-            }:knife_fork_plate: *${choice.name}*`,
-          },
-          accessory: {
-            type: 'button',
+      is_ended === true
+        ? {
+            type: 'section',
             text: {
-              type: 'plain_text',
-              text: 'Vote',
-              emoji: true,
+              type: 'mrkdwn',
+              text: `Vote ended by ${
+                ended_by != null ? `<@${ended_by}>` : 'an unknown user'
+              }! There are *${total_votes}* votes in total. Check the results below.`,
             },
-            action_id: 'pick_restaurant_pick_vote-action',
-            value: choice.id,
-          },
-        },
-        {
-          block_id: `votes_${choice.id}-block`,
-          type: 'context',
-          elements: [
-            {
-              type: 'plain_text',
-              text: 'Vote: ',
-              emoji: true,
+          }
+        : {
+            type: 'section',
+            text: {
+              type: 'mrkdwn',
+              text: `Vote for your restaurant! *Current Votes: ${total_votes}*\n_Note: Result breakdown will be shown after ending the vote._`,
             },
-            ...choice.votes.map(() => {
-              return {
+            accessory: {
+              type: 'button',
+              style: 'danger',
+              text: {
                 type: 'plain_text',
-                text: ':white_check_mark:',
+                text: 'End Vote',
                 emoji: true,
-              };
-            }),
-          ],
-        },
-      ]),
+              },
+              action_id: 'pick_restaurant_pick_end-action',
+              value: 'end_vote',
+            },
+          },
       {
         type: 'divider',
       },
-      {
-        type: 'actions',
-        elements: [
+      ...choices_to_show.flatMap(choice => {
+        const blocks = [
           {
-            type: 'button',
+            block_id: `restaurant_${choice.id}-block`,
+            type: 'section',
             text: {
-              type: 'plain_text',
-              text: 'Add 1 more choice :see_no_evil:',
-              emoji: true,
+              type: 'mrkdwn',
+              text: `${
+                is_ended === true && winners.includes(choice.id)
+                  ? ':white_check_mark: '
+                  : ''
+              }:knife_fork_plate: *${choice.name}*`,
             },
-            action_id: 'pick_restaurant_pick_add_choice-action',
-            value: `add_choice`,
+            ...(is_ended === false && {
+              accessory: {
+                type: 'button',
+                style: 'primary',
+                text: {
+                  type: 'plain_text',
+                  text: 'Vote',
+                  emoji: true,
+                },
+                action_id: 'pick_restaurant_pick_vote-action',
+                value: choice.id,
+              },
+            }),
           },
-        ],
+        ];
+        if (is_ended === true) {
+          blocks.push({
+            block_id: `votes_${choice.id}-block`,
+            type: 'context',
+            elements: [
+              {
+                type: 'plain_text',
+                text: `Vote: ${choice.votes.length}`,
+                emoji: true,
+              },
+            ],
+          });
+        }
+        return blocks;
+      }),
+      {
+        type: 'divider',
       },
     ],
   };
+
+  if (is_ended === false) {
+    payload.blocks.push({
+      type: 'actions',
+      elements: [
+        {
+          type: 'button',
+          text: {
+            type: 'plain_text',
+            text: 'Add 1 more choice :see_no_evil:',
+            emoji: true,
+          },
+          action_id: 'pick_restaurant_pick_add_choice-action',
+          value: `add_choice`,
+        },
+      ],
+    });
+  }
+
+  return payload;
 }
 
 async function pick_restaurant_get_url(conversation) {
@@ -402,7 +441,7 @@ async function pick_restaurant_new(conversation, trigger_id) {
     },
   });
   if (response.ok !== true || response.data.ok !== true) {
-    console.error('Failed opening config modal');
+    console.error('Failed opening new modal');
     console.log(JsonKit.stringify(response.data));
     return status(400);
   }
@@ -440,14 +479,14 @@ async function pick_restaurant_pick(conversation, number_of_choices) {
   const choices_to_show = choices.slice(0, number_of_choices);
   for (const choice of choices_to_show) {
     choice.shown_count++;
-    choice.win_count++;
   }
 
   const message_payload = pick_restaurant_get_pick_message_payload(
     conversation,
-    choices.map(c => ({ ...c, win_count: c.win_count - 1, votes: [] })),
+    choices.map(c => ({ ...c, votes: [] })),
     number_of_choices
   );
+
   let response = await send_slack_request(
     'POST',
     '/chat.postMessage',
@@ -552,10 +591,8 @@ async function pick_restaurant_pick_vote(
     return status(200);
   }
 
+  let restaurant_name = null;
   for (const choice of pick_metadata.event_payload.choices) {
-    if (pick_metadata.event_payload.winners.includes(choice.id)) {
-      choice.win_count--;
-    }
     if (is_overwrite) {
       for (let i = 0; i < choice.votes.length; i++) {
         if (choice.votes[i].user_id === user_id) {
@@ -565,6 +602,7 @@ async function pick_restaurant_pick_vote(
       }
     }
     if (choice.id === restaurant_id) {
+      restaurant_name = choice.name;
       choice.votes.push({
         user_id: user_id,
         ts: Date.now(),
@@ -588,36 +626,16 @@ async function pick_restaurant_pick_vote(
     return status(500);
   }
 
-  const bookmark = await pick_restaurant_get_url(conversation);
-  if (bookmark != null) {
-    const data = JsonKit.parse(bookmark.link.searchParams.get('data'));
-    for (const restaurant of data.list) {
-      if (pick_metadata.event_payload.winners.includes(restaurant.id)) {
-        restaurant.win_count--;
-      }
-      if (
-        message_payload.metadata.event_payload.winners.includes(restaurant.id)
-      ) {
-        restaurant.win_count++;
-      }
-    }
-
-    // update bookmark
-    data.ts = Date.now();
-    const data_str = JsonKit.stringify(data, {
-      extended: false,
-      minify: false,
-      compress: true,
-    });
-    response = await send_slack_request('POST', '/bookmarks.edit', {
-      channel_id: conversation,
-      bookmark_id: bookmark.id,
-      link: `${APP_ENDPOINT}/?conversation=${conversation}&data=${data_str}`,
-    });
-    if (response.ok !== true || response.data.ok !== true) {
-      console.error('Failed editing bookmark in conversation after pick vote');
-      console.log(JsonKit.stringify(response.data));
-    }
+  response = await send_slack_request('POST', '/chat.postEphemeral', {
+    channel: conversation,
+    text: `<@${user_id}> You have voted for ${restaurant_name}!`,
+    user: user_id,
+  });
+  if (response.ok !== true || response.data.ok !== true) {
+    console.error(
+      `Failed sending pick confirm empheral (user: ${user_id}) message to conversation`
+    );
+    console.log(JsonKit.stringify(response.data));
   }
   return status(200);
 }
@@ -722,47 +740,49 @@ async function handle_event(event, context) {
     case 'pick_restaurant': {
       switch (event.type) {
         case 'workflow_step_execute': {
-          context.waitUntil((async () => {
-            try {
-              const selected_conversation =
-                event.workflow_step.inputs.selected_conversation.value;
-              if (typeof selected_conversation !== 'string') {
-                throw new Error(
-                  'No conversation is selected, please reconfigure the workflow step.'
+          context.waitUntil(
+            (async () => {
+              try {
+                const selected_conversation =
+                  event.workflow_step.inputs.selected_conversation.value;
+                if (typeof selected_conversation !== 'string') {
+                  throw new Error(
+                    'No conversation is selected, please reconfigure the workflow step.'
+                  );
+                }
+
+                const number_of_choices =
+                  event.workflow_step.inputs.number_of_choices.value;
+                if (
+                  typeof number_of_choices !== 'number' ||
+                  number_of_choices <= 0
+                ) {
+                  throw new Error(
+                    'Missing number of choices, please reconfigure the workflow step.'
+                  );
+                }
+
+                await pick_restaurant_pick(
+                  selected_conversation,
+                  number_of_choices
                 );
+
+                await send_slack_request('POST', '/workflows.stepCompleted', {
+                  workflow_step_execute_id:
+                    event.workflow_step.workflow_step_execute_id,
+                });
+              } catch (err) {
+                console.error(err);
+                await send_slack_request('POST', '/workflows.stepFailed', {
+                  workflow_step_execute_id:
+                    event.workflow_step.workflow_step_execute_id,
+                  error: {
+                    message: err.message.toString(),
+                  },
+                });
               }
-
-              const number_of_choices =
-                event.workflow_step.inputs.number_of_choices.value;
-              if (
-                typeof number_of_choices !== 'number' ||
-                number_of_choices <= 0
-              ) {
-                throw new Error(
-                  'Missing number of choices, please reconfigure the workflow step.'
-                );
-              }
-
-              await pick_restaurant_pick(
-                selected_conversation,
-                number_of_choices
-              );
-
-              await send_slack_request('POST', '/workflows.stepCompleted', {
-                workflow_step_execute_id:
-                  event.workflow_step.workflow_step_execute_id,
-              });
-            } catch (err) {
-              console.error(err);
-              await send_slack_request('POST', '/workflows.stepFailed', {
-                workflow_step_execute_id:
-                  event.workflow_step.workflow_step_execute_id,
-                error: {
-                  message: err.message.toString(),
-                },
-              });
-            }
-          })());
+            })()
+          );
           return status(200);
         }
         default: {
@@ -804,7 +824,6 @@ async function handle_interaction(payload) {
           const has_number_of_choices =
             payload.workflow_step &&
             payload.workflow_step.inputs.number_of_choices;
-          // open config modal
           const response = await send_slack_request('POST', '/views.open', {
             trigger_id: payload.trigger_id,
             view: {
@@ -1076,6 +1095,108 @@ async function handle_interaction(payload) {
         }
       }
     }
+    case 'pick_restaurant-pick_end': {
+      switch (payload.type) {
+        case 'view_submission': {
+          const { conversation, message_ts, user_id } = JsonKit.parse(
+            payload.view.private_metadata
+          );
+
+          const pick_message = await pick_restaurant_get_pick_message(
+            conversation,
+            message_ts
+          );
+          if (pick_message == null) {
+            console.error('Failed retriving action source pick message');
+            return status(500);
+          }
+
+          const pick_metadata = pick_message.metadata;
+          pick_metadata.event_payload.is_ended = true;
+          pick_metadata.event_payload.ts = Date.now();
+
+          const message_payload = pick_restaurant_get_pick_message_payload(
+            conversation,
+            pick_metadata.event_payload.choices,
+            pick_metadata.event_payload.number_of_choices,
+            true,
+            user_id
+          );
+          let response = await send_slack_request('POST', '/chat.update', {
+            ts: message_ts,
+            ...message_payload,
+          });
+          if (response.ok !== true || response.data.ok !== true) {
+            console.error(
+              'Failed updating pick message to end vote in conversation'
+            );
+            console.log(JsonKit.stringify(response.data));
+            return status(500);
+          }
+
+          const bookmark = await pick_restaurant_get_url(conversation);
+          if (bookmark != null) {
+            const data = JsonKit.parse(bookmark.link.searchParams.get('data'));
+            for (const restaurant of data.list) {
+              if (
+                message_payload.metadata.event_payload.winners.includes(
+                  restaurant.id
+                )
+              ) {
+                restaurant.win_count++;
+              }
+            }
+
+            // update bookmark
+            data.ts = Date.now();
+            const data_str = JsonKit.stringify(data, {
+              extended: false,
+              minify: false,
+              compress: true,
+            });
+            response = await send_slack_request('POST', '/bookmarks.edit', {
+              channel_id: conversation,
+              bookmark_id: bookmark.id,
+              link: `${APP_ENDPOINT}/?conversation=${conversation}&data=${data_str}`,
+            });
+            if (response.ok !== true || response.data.ok !== true) {
+              console.error(
+                'Failed editing bookmark in conversation after pick end'
+              );
+              console.log(JsonKit.stringify(response.data));
+            }
+          }
+
+          const voted_users = [
+            ...new Set(
+              pick_metadata.event_payload.choices.flatMap(c =>
+                c.votes.map(v => v.user_id)
+              )
+            ),
+          ];
+          for (const user of voted_users) {
+            response = await send_slack_request('POST', '/chat.postEphemeral', {
+              channel: conversation,
+              text: `<@${user}> Vote has ended! You may check the result.`,
+              user: user,
+            });
+            if (response.ok !== true || response.data.ok !== true) {
+              console.error(
+                `Failed sending vote end empheral (user: ${user}) message to conversation`
+              );
+              console.log(JsonKit.stringify(response.data));
+            }
+          }
+
+          return status(200);
+        }
+        default: {
+          console.error('Received unknown interaction type');
+          console.log(JsonKit.stringify(payload));
+          break;
+        }
+      }
+    }
     default: {
       switch (payload.type) {
         case 'block_actions': {
@@ -1209,6 +1330,55 @@ async function handle_interaction(payload) {
                     );
                     console.log(JsonKit.stringify(response.data));
                   }
+                }
+                return status(200);
+              }
+              case 'pick_restaurant_pick_end-action': {
+                const response = await send_slack_request(
+                  'POST',
+                  '/views.open',
+                  {
+                    trigger_id,
+                    view: {
+                      type: 'modal',
+                      title: {
+                        type: 'plain_text',
+                        text: 'End Vote',
+                        emoji: true,
+                      },
+                      close: {
+                        type: 'plain_text',
+                        text: 'No',
+                        emoji: true,
+                      },
+                      submit: {
+                        type: 'plain_text',
+                        text: 'Yes',
+                        emoji: true,
+                      },
+                      private_metadata: JsonKit.stringify({
+                        conversation: conversation_id,
+                        message_ts,
+                        user_id,
+                      }),
+                      callback_id: 'pick_restaurant-pick_end',
+                      blocks: [
+                        {
+                          type: 'section',
+                          text: {
+                            type: 'mrkdwn',
+                            text:
+                              'Are you sure you want to end the vote now?\n\n*This action is irreversible!*',
+                          },
+                        },
+                      ],
+                    },
+                  }
+                );
+                if (response.ok !== true || response.data.ok !== true) {
+                  console.error('Failed opening end vote confirmation modal');
+                  console.log(JsonKit.stringify(response.data));
+                  return status(500);
                 }
                 return status(200);
               }
