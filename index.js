@@ -1,5 +1,6 @@
 import { Router } from 'itty-router';
-import { missing, status, text } from 'itty-router-extras';
+import { json, missing, status, text } from 'itty-router-extras';
+import { v4 as uuid } from 'uuid';
 import { JsonKit } from '@kit-p/json-kit';
 
 /* Global Variables */
@@ -8,33 +9,6 @@ const APP_ENDPOINT = 'https://slack-restaurant-picker.jacky-flow.workers.dev';
 const SLACK_API_ROOT = 'https://slack.com/api';
 
 /* Utility Functions */
-function encode_base64_for_url(base64_str) {
-  return base64_str
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/[=\s]/g, '');
-}
-
-function binary_search(arr, item, low, high) {
-  if (low == null) {
-    low = 0;
-  }
-  if (high == null) {
-    high = arr.length - 1;
-  }
-  if (low >= high) {
-    return item >= arr[low] ? low : high;
-  }
-  const mid = Math.floor((low + high) / 2);
-  if (item === arr[mid]) {
-    return mid;
-  }
-  if (item > arr[mid]) {
-    return binary_search(arr, item, mid + 1, high);
-  }
-  return binary_search(arr, item, low, mid - 1);
-}
-
 async function send_slack_request(method, path, data) {
   const url = `${SLACK_API_ROOT}${path}`;
   console.log(`[${method}]: ${url}`);
@@ -104,15 +78,45 @@ function pick_restaurant_get_help_block() {
   };
 }
 
-async function pick_restaurant_setup(conversation) {
-  const initial_data = pick_restaurant_initialize_data(conversation);
-  const data_str = encode_base64_for_url(
-    JsonKit.stringify(initial_data, {
-      extended: false,
-      minify: false,
-      compress: true,
-    })
+async function pick_restaurant_get_url(conversation) {
+  const response = await send_slack_request('POST', '/bookmarks.list', {
+    channel_id: conversation,
+  });
+  if (response.ok !== true || response.data.ok !== true) {
+    console.error('Failed retrieving conversation bookmarks');
+    console.log(JsonKit.stringify(response.data));
+    return null;
+  }
+
+  const bookmarks = response.data.bookmarks;
+  if (!Array.isArray(bookmarks)) {
+    console.error('Failed parsing conversation bookmarks');
+    console.log(JsonKit.stringify(response.data));
+    return null;
+  }
+
+  const bookmark = bookmarks.find(
+    b =>
+      b.title === APP_NAME &&
+      b.type === 'link' &&
+      b.link != null &&
+      b.link.startsWith(`${APP_ENDPOINT}/?conversation=${conversation}&data=`)
   );
+  if (bookmark == null) {
+    return null;
+  }
+
+  bookmark.link = new URL(bookmark.link);
+  return bookmark;
+}
+
+async function pick_restaurant_setup(conversation, slient) {
+  const initial_data = pick_restaurant_initialize_data(conversation);
+  const data_str = JsonKit.stringify(initial_data, {
+    extended: false,
+    minify: false,
+    compress: true,
+  });
   let response = await send_slack_request('POST', '/bookmarks.add', {
     channel_id: conversation,
     type: 'link',
@@ -122,6 +126,10 @@ async function pick_restaurant_setup(conversation) {
   if (response.ok !== true || response.data.ok !== true) {
     console.error('Failed adding bookmark to conversation');
     console.log(JsonKit.stringify(response.data));
+    return;
+  }
+
+  if (slient === true) {
     return;
   }
 
@@ -177,101 +185,308 @@ async function pick_restaurant_help(conversation, user_id) {
       } message to conversation`
     );
     console.log(JsonKit.stringify(response.data));
+    return status(500);
   }
+  return status(200);
 }
 
-async function pick_restaurant_get_url(conversation) {
-  const response = await send_slack_request('POST', '/bookmarks.list', {
-    channel_id: conversation,
+async function pick_restaurant_list(conversation, trigger_id) {
+  // TODO: render list and allow edit / remove
+}
+
+async function pick_restaurant_new(conversation, trigger_id) {
+  const response = await send_slack_request('POST', '/views.open', {
+    trigger_id,
+    view: {
+      type: 'modal',
+      title: {
+        type: 'plain_text',
+        text: 'Add New Restarurant',
+        emoji: true,
+      },
+      close: {
+        type: 'plain_text',
+        text: 'Cancel',
+        emoji: true,
+      },
+      submit: {
+        type: 'plain_text',
+        text: 'Save',
+        emoji: true,
+      },
+      private_metadata: JsonKit.stringify({
+        conversation,
+      }),
+      callback_id: 'pick_restaurant-new',
+      blocks: [
+        {
+          block_id: 'restaurant_name-block',
+          type: 'input',
+          element: {
+            type: 'plain_text_input',
+            action_id: 'restaurant_name-action',
+            placeholder: {
+              type: 'plain_text',
+              text: 'Name of Restaurant',
+            },
+            min_length: 2,
+            max_length: 30,
+            focus_on_load: true,
+          },
+          label: {
+            type: 'plain_text',
+            text: 'Name',
+          },
+        },
+        {
+          block_id: 'restaurant_weight-block',
+          type: 'input',
+          element: {
+            type: 'number_input',
+            action_id: 'restaurant_weight-action',
+            is_decimal_allowed: false,
+            placeholder: {
+              type: 'plain_text',
+              text: 'Weight (0 [disabled] - 99)',
+            },
+            initial_value: '50',
+            min_value: '0',
+            max_value: '99',
+          },
+          label: {
+            type: 'plain_text',
+            text: 'Weight',
+          },
+        },
+      ],
+    },
   });
   if (response.ok !== true || response.data.ok !== true) {
-    console.error('Failed retrieving conversation bookmarks');
+    console.error('Failed opening config modal');
     console.log(JsonKit.stringify(response.data));
-    return null;
+    return status(400);
   }
-
-  const bookmarks = response.data.bookmarks;
-  if (!Array.isArray(bookmarks)) {
-    console.error('Failed parsing conversation bookmarks');
-    console.log(JsonKit.stringify(response.data));
-    return null;
-  }
-
-  const bookmark = bookmarks.find(
-    b =>
-      b.title === APP_NAME &&
-      b.type === 'link' &&
-      b.link != null &&
-      b.link.startsWith(`${APP_ENDPOINT}/?conversation=${conversation}&data=`)
-  );
-  if (bookmark == null) {
-    return null;
-  }
-
-  return new URL(bookmark.link);
-}
-
-async function pick_restaurant_new(conversation, new_items) {
-  // TODO: get existing list, append new one
+  return status(200);
 }
 
 async function pick_restaurant_pick(conversation, number_of_choices) {
-  const link = await pick_restaurant_get_url(conversation);
-  if (link == null) {
+  const bookmark = await pick_restaurant_get_url(conversation);
+  if (bookmark == null) {
     await pick_restaurant_setup(conversation);
-    return;
+    return status(200);
   }
 
-  const data = JsonKit.parse(link.searchParams.get('data'));
+  const data = JsonKit.parse(bookmark.link.searchParams.get('data'));
   if (!pick_restaurant_validate_data(conversation, data)) {
     // TODO: call pick_restaurant_repair
-    return;
+    console.error('Invalid bookmark data');
+    return status(200);
   }
 
-  const cumulative_weights = [];
-  for (const item of data.list) {
-    const cumulative_weight = cumulative_weights.at(-1);
-    const weight =
-      typeof item.weight === 'number' && item.weight >= 0
-        ? Math.floor(item.weight)
-        : 1;
-    cumulative_weights.push(cumulative_weight + weight);
+  if (data.list.length <= 0) {
+    await pick_restaurant_setup(conversation);
+    return status(200);
   }
 
-  const choices = [];
-  while (choices.length < number_of_choices) {
-    const pointer = Math.random() * cumulative_weights.at(-1);
-    const idx = binary_search(cumulative_weights, pointer);
-    const weight = cumulative_weights[idx];
-    for (let i = idx; i < cumulative_weights.length; i++) {
-      cumulative_weights[i] -= weight;
-    }
-    choices.push(data.list[idx]);
+  const choices = [...data.list].sort((a, b) => {
+    const aWeight =
+      typeof a.weight === 'number' && a.weight >= 0 ? Math.floor(a.weight) : 1;
+    const bWeight =
+      typeof b.weight === 'number' && b.weight >= 0 ? Math.floor(b.weight) : 1;
+    const pivot = Math.random() * (aWeight + bWeight);
+    return pivot < aWeight ? -1 : 1;
+  });
+
+  const choices_to_show = choices.slice(0, number_of_choices);
+  for (const choice of choices_to_show) {
+    choice.shown_count++;
   }
 
-  const fallback_text = `Pick a restaurant from one of [${choices
+  const fallback_text = `Pick a restaurant from one of [${choices_to_show
     .map(c => `"${c.name}"`)
     .join(', ')}]`;
 
-  const response = await send_slack_request('POST', '/chat.postMessage', {
+  let response = await send_slack_request('POST', '/chat.postMessage', {
     channel: conversation,
+    metadata: {
+      event_type: 'restaurant_picker-pick',
+      event_payload: {
+        conversation: conversation,
+        choices: choices.map(c => ({ ...c, votes: [] })),
+        number_of_choices,
+      },
+    },
     text: fallback_text,
     blocks: [
-      // TODO
+      {
+        type: 'section',
+        text: {
+          type: 'mrkdwn',
+          text: 'Hey, I have picked these restaurants for you!',
+        },
+      },
+      {
+        type: 'divider',
+      },
+      ...choices_to_show.flatMap(choice => [
+        {
+          type: 'section',
+          text: {
+            type: 'mrkdwn',
+            text: `:knife_fork_plate: *${choice.name}*`,
+          },
+          accessory: {
+            type: 'button',
+            text: {
+              type: 'plain_text',
+              text: 'Vote',
+              emoji: true,
+            },
+            action_id: 'pick_restaurant_pick_vote-action',
+            value: choice.id,
+          },
+        },
+        {
+          type: 'context',
+          elements: [
+            {
+              type: 'plain_text',
+              text: 'Vote: ',
+              emoji: true,
+            },
+          ],
+        },
+      ]),
+      {
+        type: 'divider',
+      },
+      {
+        type: 'actions',
+        elements: [
+          {
+            type: 'button',
+            text: {
+              type: 'plain_text',
+              text: 'Add 1 more choice :see_no_evil:',
+              emoji: true,
+            },
+            action_id: 'pick_restaurant_pick_add_choice-action',
+            value: `add_choice`,
+          },
+        ],
+      },
     ],
   });
   if (response.ok !== true || response.data.ok !== true) {
     console.error('Failed sending pick message to conversation');
     console.log(JsonKit.stringify(response.data));
-    return;
+    return status(500);
   }
+
+  // update bookmark
+  const data_str = JsonKit.stringify(data, {
+    extended: false,
+    minify: false,
+    compress: true,
+  });
+  response = await send_slack_request('POST', '/bookmarks.edit', {
+    channel_id: conversation,
+    bookmark_id: bookmark.id,
+    link: `${APP_ENDPOINT}/?conversation=${conversation}&data=${data_str}`,
+  });
+  if (response.ok !== true || response.data.ok !== true) {
+    console.error('Failed editing bookmark in conversation after pick');
+    console.log(JsonKit.stringify(response.data));
+    return status(500);
+  }
+  return status(200);
 }
 
 /* API Handler Functions */
 async function handle_command(command) {
-  // TODO: handle command
   console.log(JsonKit.stringify(command));
-  return status(400);
+  const { trigger_id, channel_id, user_id } = command;
+  const [action, args] = command.text.split(' ', 2);
+
+  switch (action) {
+    case 'help': {
+      return await pick_restaurant_help(channel_id, user_id);
+    }
+    case 'list': {
+      return await pick_restaurant_list(channel_id, trigger_id);
+    }
+    case 'new': {
+      return await pick_restaurant_new(channel_id, trigger_id);
+    }
+    case 'pick': {
+      try {
+        const number_of_choices = Number.parseInt(args, 10);
+        if (
+          !Number.isSafeInteger(number_of_choices) ||
+          number_of_choices <= 0
+        ) {
+          throw new Error('Invalid number of choices');
+        }
+        return await pick_restaurant_pick(channel_id, number_of_choices);
+      } catch (err) {
+        console.error(err);
+        const fallback_text = `Invalid number of choices. Usage is \`pick <N>\` where <N> is a positive integer.`;
+        const response = await send_slack_request(
+          'POST',
+          '/chat.postEphemeral',
+          {
+            channel: channel_id,
+            text: fallback_text,
+            blocks: [
+              {
+                type: 'section',
+                text: {
+                  type: 'mrkdwn',
+                  text: fallback_text,
+                },
+              },
+              pick_restaurant_get_help_block(),
+            ],
+            user: user_id,
+          }
+        );
+        if (response.ok !== true || response.data.ok !== true) {
+          console.error(
+            `Failed sending error empheral (user: ${user_id}) message to conversation`
+          );
+          console.log(JsonKit.stringify(response.data));
+          return status(500);
+        }
+        return status(200);
+      }
+    }
+    default: {
+      const fallback_text = `${action} is not a valid command. You can use \`help\` to check available commands.`;
+      const response = await send_slack_request('POST', '/chat.postEphemeral', {
+        channel: channel_id,
+        text: fallback_text,
+        blocks: [
+          {
+            type: 'section',
+            text: {
+              type: 'mrkdwn',
+              text: fallback_text,
+            },
+          },
+          pick_restaurant_get_help_block(),
+        ],
+        user: user_id,
+      });
+      if (response.ok !== true || response.data.ok !== true) {
+        console.error(
+          `Failed sending error empheral (user: ${user_id}) message to conversation`
+        );
+        console.log(JsonKit.stringify(response.data));
+        return status(500);
+      }
+      return status(200);
+    }
+  }
 }
 
 async function handle_event(event) {
@@ -348,12 +563,7 @@ async function handle_event(event) {
 
 async function handle_interaction(payload) {
   console.log(JsonKit.stringify(payload));
-  const callback_id = payload.callback_id || payload.view.callback_id;
-  if (typeof callback_id !== 'string') {
-    console.error('Received unknown interaction payload');
-    console.log(JsonKit.stringify(payload));
-    return status(400);
-  }
+  const callback_id = payload.callback_id || payload.view.callback_id || null;
 
   switch (callback_id) {
     case 'pick_restaurant': {
@@ -455,19 +665,32 @@ async function handle_interaction(payload) {
               conversations_select_action_id
             ].selected_conversation;
           if (typeof selected_conversation !== 'string') {
-            console.error('Submitted invalid conversation ID');
-            console.log(JsonKit.stringify(payload));
-            return status(400);
+            return json(
+              {
+                response_action: 'errors',
+                errors: {
+                  [conversations_select_block_id]: 'Please select a channel!',
+                },
+              },
+              { status: 200 }
+            );
           }
           const number_of_choices = Number.parseInt(
             payload.view.state.values[number_input_block_id][
               number_input_action_id
-            ].value
+            ].value,
+            10
           );
           if (typeof number_of_choices !== 'number' || number_of_choices <= 0) {
-            console.error('Submitted invalid number of choices to pick');
-            console.log(JsonKit.stringify(payload));
-            return status(400);
+            return json(
+              {
+                response_action: 'errors',
+                errors: {
+                  [number_input_block_id]: 'Please enter a positive integer!',
+                },
+              },
+              { status: 200 }
+            );
           }
 
           // update payload
@@ -504,10 +727,149 @@ async function handle_interaction(payload) {
       }
       break;
     }
+    case 'pick_restaurant-new': {
+      switch (payload.type) {
+        case 'view_submission': {
+          const restaurant_name =
+            payload.view.state.values['restaurant_name-block'][
+              'restaurant_name-action'
+            ].value;
+          if (typeof restaurant_name !== 'string') {
+            return json(
+              {
+                response_action: 'errors',
+                errors: {
+                  'restaurant_name-block': 'Name is invalid!',
+                },
+              },
+              { status: 200 }
+            );
+          }
+          const restaruant_weight = Number.parseInt(
+            payload.view.state.values['restaurant_weight-block'][
+              'restaurant_weight-action'
+            ].value,
+            10
+          );
+          if (typeof restaruant_weight !== 'number' || restaruant_weight < 0) {
+            return json(
+              {
+                response_action: 'errors',
+                errors: {
+                  'restaurant_weight-block': 'Please enter a positive integer!',
+                },
+              },
+              { status: 200 }
+            );
+          }
+
+          const { conversation } = JsonKit.parse(payload.view.private_metadata);
+          let bookmark = await pick_restaurant_get_url(conversation);
+          if (bookmark == null) {
+            await pick_restaurant_setup(conversation, true);
+            bookmark = await pick_restaurant_get_url(conversation);
+            if (bookmark == null) {
+              console.error('Failed getting bookmark');
+              console.log(JsonKit.stringify(payload));
+              return status(500);
+            }
+          }
+
+          const data = JsonKit.parse(bookmark.link.searchParams.get('data'));
+          if (!pick_restaurant_validate_data(conversation, data)) {
+            // TODO: call pick_restaurant_repair
+            console.error('Invalid bookmark data');
+            return status(500);
+          }
+
+          if (data.list.findIndex(r => r.name === restaurant_name) >= 0) {
+            return json(
+              {
+                response_action: 'errors',
+                errors: {
+                  'restaurant_name-block': 'This restaurant has been added!',
+                },
+              },
+              { status: 200 }
+            );
+          }
+
+          data.ts = Date.now();
+          data.list.push({
+            id: uuid(),
+            name: restaurant_name,
+            weight: restaruant_weight,
+            shown_count: 0,
+            win_count: 0,
+          });
+
+          // update bookmark
+          const data_str = JsonKit.stringify(data, {
+            extended: false,
+            minify: false,
+            compress: true,
+          });
+          const response = await send_slack_request('POST', '/bookmarks.edit', {
+            channel_id: conversation,
+            bookmark_id: bookmark.id,
+            link: `${APP_ENDPOINT}/?conversation=${conversation}&data=${data_str}`,
+          });
+          if (response.ok !== true || response.data.ok !== true) {
+            console.error('Failed editing bookmark in conversation after new');
+            console.log(JsonKit.stringify(response.data));
+            return status(500);
+          }
+          return status(200);
+        }
+        default: {
+          console.error('Received unknown interaction type');
+          console.log(JsonKit.stringify(payload));
+          break;
+        }
+      }
+    }
     default: {
-      console.error('Received unknown interaction callback_id');
-      console.log(JsonKit.stringify(payload));
-      break;
+      switch (payload.type) {
+        case 'block_actions': {
+          const conversation_id = payload.channel.id;
+          const message_ts = payload.message.ts;
+          const user_id = payload.user.id;
+
+          if (
+            !Array.isArray(payload.actions) ||
+            typeof conversation_id !== 'string' ||
+            typeof message_ts !== 'string' ||
+            typeof user_id !== 'string'
+          ) {
+            return status(400);
+          }
+
+          for (const action of payload.actions) {
+            switch (action.action_id) {
+              case 'pick_restaurant_pick_vote-action': {
+                const restaurant_id = action.value;
+                // TODO
+              }
+              case 'pick_restaurant_pick_add_choice-action': {
+                // TODO
+              }
+              default: {
+                console.error(
+                  'Received unknown block action interaction payload'
+                );
+                console.log(JsonKit.stringify(payload));
+                return status(400);
+              }
+            }
+          }
+          return status(200);
+        }
+        default: {
+          console.error('Received unknown interaction payload');
+          console.log(JsonKit.stringify(payload));
+          break;
+        }
+      }
     }
   }
   return status(400);
@@ -536,7 +898,7 @@ const withData = async req => {
 
 /* API Endpoint Functions */
 router.post('/api/command', withData, async req => {
-  await handle_command(req.data);
+  return await handle_command(req.data);
 });
 
 router.post('/api/event', withData, async req => {
@@ -555,8 +917,9 @@ router.post('/api/interact', withData, async req => {
 
 /* Web Page Functions */
 router.get('/', async req => {
-  const conversation = req.params.conversation;
-  const data = JsonKit.parse(req.params.data);
+  const url = new URL(req.url);
+  const conversation = url.searchParams.get('conversation');
+  const data = JsonKit.parse(url.searchParams.get('data'));
 
   if (data.conversation_id !== conversation) {
     return text('Unauthorized', { status: 401 });
@@ -601,16 +964,21 @@ router.get('/', async req => {
       </tr>
     </thead>
     <tbody>
-      ${data.list.map(
-        restaurant => `
+      ${data.list
+        .map(
+          restaurant => `
           <tr>
             <td>${restaurant.name}</td>
             <td>${restaurant.weight}</td>
             <td>${restaurant.shown_count}</td>
-            <td>${(restaurant.win_rate * 100).toFixed(0)}%</td>
+            <td>${(
+              (restaurant.win_count / restaurant.shown_count) *
+              100
+            ).toFixed(0)}%</td>
           </tr>
       `
-      )}
+        )
+        .join('')}
     </tbody>
   </table>
 </body>
