@@ -1,7 +1,4 @@
-name = "router"
-type = "webpack"
-
-account_id = ""
-workers_dev = true
-route = ""
-zone_id = ""
+name = "slack-restaurant-picker"
+main = "index.js"
+compatibility_date = "2023-03-14"
+account_id = "dffbae8a1ff9994ce7257013e54fe1b9"
