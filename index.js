@@ -1324,6 +1324,12 @@ router.get('/', async req => {
     </thead>
     <tbody>
       ${data.list
+        .sort((a, b) => {
+          if (a.win_count !== b.win_count) {
+            return b.win_count - a.win_count;
+          }
+          return a.shown_count - b.shown_count;
+        })
         .map(
           restaurant => `
           <tr>
