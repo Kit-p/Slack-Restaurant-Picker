@@ -1,4 +1,8 @@
-name = "slack-restaurant-picker"
+name = "slack-restaurant-picker" # EDIT
 main = "src/index.js"
 compatibility_date = "2023-03-14"
-account_id = "dffbae8a1ff9994ce7257013e54fe1b9"
+account_id = "dffbae8a1ff9994ce7257013e54fe1b9" # EDIT
+
+[vars]
+APP_NAME = "Restaurant Picker" # EDIT
+APP_ENDPOINT = "https://slack-restaurant-picker.jacky-flow.workers.dev" # EDIT
