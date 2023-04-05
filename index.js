@@ -67,7 +67,9 @@ function pick_restaurant_validate_data(conversation, data) {
   }
   if (
     !Array.isArray(data.list) &&
-    data.list.every(i => typeof i.id === 'string' && typeof i.name === 'string')
+    data.list.every(
+      (i) => typeof i.id === 'string' && typeof i.name === 'string'
+    )
   ) {
     return false;
   }
@@ -97,7 +99,7 @@ function pick_restaurant_get_pick_message_payload(
 ) {
   const choices_to_show = choices.slice(0, number_of_choices);
   const fallback_text = `Pick a restaurant from one of [${choices_to_show
-    .map(c => `"${c.name}"`)
+    .map((c) => `"${c.name}"`)
     .join(', ')}]`;
 
   let total_votes = 0;
@@ -107,9 +109,9 @@ function pick_restaurant_get_pick_message_payload(
     max_vote = Math.max(max_vote, choice.votes.length);
   }
   let winners = choices_to_show.filter(
-    choice => choice.votes.length === max_vote
+    (choice) => choice.votes.length === max_vote
   );
-  winners = winners.map(winner => winner.id);
+  winners = winners.map((winner) => winner.id);
 
   const payload = {
     channel: conversation,
@@ -165,7 +167,7 @@ function pick_restaurant_get_pick_message_payload(
       {
         type: 'divider',
       },
-      ...choices_to_show.flatMap(choice => {
+      ...choices_to_show.flatMap((choice) => {
         const blocks = [
           {
             block_id: `restaurant_${choice.id}-block`,
@@ -253,7 +255,7 @@ async function pick_restaurant_get_url(conversation) {
   }
 
   const bookmark = bookmarks.find(
-    b =>
+    (b) =>
       b.title === APP_NAME &&
       b.type === 'link' &&
       b.link != null &&
@@ -433,7 +435,7 @@ async function pick_restaurant_list(
               }
               return b.weight - a.weight;
             })
-            .flatMap(restaurant => {
+            .flatMap((restaurant) => {
               return [
                 {
                   block_id: restaurant.id,
@@ -637,7 +639,7 @@ async function pick_restaurant_pick(conversation, number_of_choices) {
 
   const message_payload = pick_restaurant_get_pick_message_payload(
     conversation,
-    choices.map(c => ({ ...c, votes: [] })),
+    choices.map((c) => ({ ...c, votes: [] })),
     number_of_choices
   );
 
@@ -692,8 +694,8 @@ async function pick_restaurant_pick_vote(
   const pick_metadata = pick_message.metadata;
   if (
     !is_overwrite &&
-    pick_metadata.event_payload.choices.some(c =>
-      c.votes.some(v => v.user_id === user_id)
+    pick_metadata.event_payload.choices.some((c) =>
+      c.votes.some((v) => v.user_id === user_id)
     )
   ) {
     // user already voted
@@ -728,8 +730,7 @@ async function pick_restaurant_pick_vote(
             type: 'section',
             text: {
               type: 'mrkdwn',
-              text:
-                '*You have already voted!*\n\nDo you want to *overwrite* your previous vote?',
+              text: '*You have already voted!*\n\nDo you want to *overwrite* your previous vote?',
             },
           },
         ],
@@ -1018,8 +1019,7 @@ async function handle_interaction(payload) {
                   type: 'section',
                   text: {
                     type: 'mrkdwn',
-                    text:
-                      '> :exclamation: For *private* channels, please first integrate this app.',
+                    text: '> :exclamation: For *private* channels, please first integrate this app.',
                   },
                 },
                 {
@@ -1180,7 +1180,7 @@ async function handle_interaction(payload) {
             return status(500);
           }
 
-          if (data.list.findIndex(r => r.name === restaurant_name) >= 0) {
+          if (data.list.findIndex((r) => r.name === restaurant_name) >= 0) {
             return json(
               {
                 response_action: 'errors',
@@ -1262,12 +1262,8 @@ async function handle_interaction(payload) {
             );
           }
 
-          const {
-            conversation,
-            list_view,
-            data_ts,
-            restaurant_id,
-          } = JsonKit.parse(payload.view.private_metadata);
+          const { conversation, list_view, data_ts, restaurant_id } =
+            JsonKit.parse(payload.view.private_metadata);
           let bookmark = await pick_restaurant_get_url(conversation);
           if (bookmark == null) {
             await pick_restaurant_setup(conversation, true);
@@ -1301,7 +1297,7 @@ async function handle_interaction(payload) {
           }
 
           const restaurant_idx = data.list.findIndex(
-            r => r.id === restaurant_id
+            (r) => r.id === restaurant_id
           );
           if (restaurant_idx < 0) {
             return json(
@@ -1348,12 +1344,8 @@ async function handle_interaction(payload) {
     case 'pick_restaurant-pick_overwrite': {
       switch (payload.type) {
         case 'view_submission': {
-          const {
-            conversation,
-            message_ts,
-            user_id,
-            restaurant_id,
-          } = JsonKit.parse(payload.view.private_metadata);
+          const { conversation, message_ts, user_id, restaurant_id } =
+            JsonKit.parse(payload.view.private_metadata);
           return await pick_restaurant_pick_vote(
             conversation,
             message_ts,
@@ -1442,8 +1434,8 @@ async function handle_interaction(payload) {
 
           const voted_users = [
             ...new Set(
-              pick_metadata.event_payload.choices.flatMap(c =>
-                c.votes.map(v => v.user_id)
+              pick_metadata.event_payload.choices.flatMap((c) =>
+                c.votes.map((v) => v.user_id)
               )
             ),
           ];
@@ -1534,8 +1526,7 @@ async function handle_interaction(payload) {
                           type: 'section',
                           text: {
                             type: 'mrkdwn',
-                            text:
-                              '*There are no more restaurants to pick.*\n\nPlease add new ones and start another pick!',
+                            text: '*There are no more restaurants to pick.*\n\nPlease add new ones and start another pick!',
                           },
                         },
                       ],
@@ -1556,11 +1547,12 @@ async function handle_interaction(payload) {
                 pick_metadata.event_payload.number_of_choices = last_choice + 1;
                 pick_metadata.event_payload.ts = Date.now();
 
-                const message_payload = pick_restaurant_get_pick_message_payload(
-                  conversation_id,
-                  pick_metadata.event_payload.choices,
-                  pick_metadata.event_payload.number_of_choices
-                );
+                const message_payload =
+                  pick_restaurant_get_pick_message_payload(
+                    conversation_id,
+                    pick_metadata.event_payload.choices,
+                    pick_metadata.event_payload.number_of_choices
+                  );
                 let response = await send_slack_request(
                   'POST',
                   '/chat.update',
@@ -1583,7 +1575,7 @@ async function handle_interaction(payload) {
                     bookmark.link.searchParams.get('data')
                   );
                   const restaurant = data.list.find(
-                    restaurant =>
+                    (restaurant) =>
                       restaurant.id ===
                       pick_metadata.event_payload.choices[last_choice].id
                   );
@@ -1617,8 +1609,8 @@ async function handle_interaction(payload) {
 
                 const voted_users = [
                   ...new Set(
-                    pick_metadata.event_payload.choices.flatMap(c =>
-                      c.votes.map(v => v.user_id)
+                    pick_metadata.event_payload.choices.flatMap((c) =>
+                      c.votes.map((v) => v.user_id)
                     )
                   ),
                 ];
@@ -1682,8 +1674,7 @@ async function handle_interaction(payload) {
                           type: 'section',
                           text: {
                             type: 'mrkdwn',
-                            text:
-                              'Are you sure you want to end the vote now?\n\n*This action is irreversible!*',
+                            text: 'Are you sure you want to end the vote now?\n\n*This action is irreversible!*',
                           },
                         },
                       ],
@@ -1707,7 +1698,7 @@ async function handle_interaction(payload) {
                     const data = JsonKit.parse(private_metadata.data);
                     const restaurant_id = action.block_id;
                     const restaurant = data.list.find(
-                      r => r.id === restaurant_id
+                      (r) => r.id === restaurant_id
                     );
                     if (restaurant == null) {
                       console.error(
@@ -1830,7 +1821,7 @@ async function handle_interaction(payload) {
                         }
 
                         const restaurant_idx = data.list.findIndex(
-                          r => r.id === restaurant_id
+                          (r) => r.id === restaurant_id
                         );
                         if (restaurant_idx < 0) {
                           return status(200);
@@ -1911,7 +1902,7 @@ async function handle_interaction(payload) {
 const router = Router();
 
 /* Middleware */
-const withData = async req => {
+const withData = async (req) => {
   const contentType = req.headers.get('content-type');
   req.data = undefined;
 
@@ -1929,7 +1920,7 @@ const withData = async req => {
 };
 
 /* API Endpoint Functions */
-router.post('/api/command', withData, async req => {
+router.post('/api/command', withData, async (req) => {
   return await handle_command(req.data);
 });
 
@@ -1940,7 +1931,7 @@ router.post('/api/event', withData, async (req, event) => {
   return await handle_event(req.data.event, event);
 });
 
-router.post('/api/interact', withData, async req => {
+router.post('/api/interact', withData, async (req) => {
   if (typeof req.data.payload !== 'string') {
     return text('payload must be a string', { status: 400 });
   }
@@ -1948,7 +1939,7 @@ router.post('/api/interact', withData, async req => {
 });
 
 /* Web Page Functions */
-router.get('/', async req => {
+router.get('/', async (req) => {
   const url = new URL(req.url);
   const conversation = url.searchParams.get('conversation');
   const data = JsonKit.parse(url.searchParams.get('data'));
@@ -2007,7 +1998,7 @@ router.get('/', async req => {
           return b.weight - a.weight;
         })
         .map(
-          restaurant => `
+          (restaurant) => `
           <tr>
             <td>${restaurant.name}</td>
             <td>${restaurant.weight}</td>
@@ -2035,6 +2026,6 @@ router.get('/', async req => {
 
 router.all('*', () => missing('Not Found'));
 
-addEventListener('fetch', e => {
+addEventListener('fetch', (e) => {
   e.respondWith(router.handle(e.request, e));
 });
