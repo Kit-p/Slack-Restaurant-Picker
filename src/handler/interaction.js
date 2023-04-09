@@ -159,7 +159,7 @@ export async function interaction_handler(payload) {
                   trigger_id
                 );
               }
-              case 'list_action-action': {
+              case 'pick_restaurant_list-action': {
                 switch (action.type) {
                   case 'overflow': {
                     const private_metadata = JsonKit.parse(
@@ -173,7 +173,7 @@ export async function interaction_handler(payload) {
                     );
                     if (restaurant == null) {
                       console.error(
-                        'Restaurant not found for list_action-action'
+                        'Restaurant not found for pick_restaurant_list-action'
                       );
                       return status(500);
                     }
