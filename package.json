@@ -21,7 +21,6 @@
     "@kit-p/json-kit": "^1.1.1",
     "itty-router": "^3.0.12",
     "itty-router-extras": "^0.4.2",
-    "serverless-cloudflare-workers": "^1.2.0",
     "uuid": "^9.0.0"
   }
 }
