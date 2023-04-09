@@ -94,6 +94,18 @@ export async function interaction_handler(payload) {
         }
       }
     }
+    case 'pick_restaurant-list': {
+      switch (payload.type) {
+        case 'view_submission': {
+          return status(200);
+        }
+        default: {
+          console.error('Received unknown interaction type');
+          console.log(JsonKit.stringify(payload));
+          break;
+        }
+      }
+    }
     default: {
       switch (payload.type) {
         case 'block_actions': {
