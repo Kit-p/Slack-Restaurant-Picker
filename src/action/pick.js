@@ -229,7 +229,7 @@ export async function pick_action(conversation, number_of_choices) {
     return status(500);
   }
 
-  if (!(await update_bookmark(conversation, data))) {
+  if (!(await update_bookmark(conversation, bookmark.id, data))) {
     return status(500);
   }
   return status(200);
@@ -303,7 +303,7 @@ export async function pick_add_choice_action(
       restaurant.shown_count++;
     }
 
-    await update_bookmark(conversation, data);
+    await update_bookmark(conversation, bookmark.id, data);
   }
 
   const voted_users = [
@@ -423,7 +423,7 @@ export async function pick_end_action_submit(payload) {
       }
     }
 
-    await update_bookmark(conversation, data);
+    await update_bookmark(conversation, bookmark.id, data);
   }
 
   const voted_users = [

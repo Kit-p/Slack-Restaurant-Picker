@@ -180,7 +180,7 @@ export async function update_action_submit(payload) {
   data.list[restaurant_idx].name = restaurant_name;
   data.list[restaurant_idx].weight = restaruant_weight;
 
-  if (!(await update_bookmark(conversation, data))) {
+  if (!(await update_bookmark(conversation, bookmark.id, data))) {
     return status(500);
   }
   return await list_action(conversation, list_view, true);

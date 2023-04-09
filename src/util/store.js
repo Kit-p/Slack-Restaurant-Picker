@@ -56,7 +56,7 @@ export async function retrieve_bookmark(conversation) {
   return bookmark;
 }
 
-export async function update_bookmark(conversation, data) {
+export async function update_bookmark(conversation, bookmark_id, data) {
   data.ts = Date.now();
   const data_str = JsonKit.stringify(data, {
     extended: false,
@@ -65,7 +65,7 @@ export async function update_bookmark(conversation, data) {
   });
   const response = await send_slack_request('POST', '/bookmarks.edit', {
     channel_id: conversation,
-    bookmark_id: bookmark.id,
+    bookmark_id,
     link: `${APP_ENDPOINT}/?conversation=${conversation}&data=${data_str}`,
   });
   if (response.ok !== true || response.data.ok !== true) {

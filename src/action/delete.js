@@ -36,7 +36,7 @@ export async function delete_action(conversation, restaurant_id, view_id) {
 
   data.list.splice(restaurant_idx, 1);
 
-  if (!(await update_bookmark(conversation, data))) {
+  if (!(await update_bookmark(conversation, bookmark.id, data))) {
     return status(500);
   }
   return await list_action(conversation, view_id, true);

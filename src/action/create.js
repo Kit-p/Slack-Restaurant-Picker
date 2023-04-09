@@ -158,7 +158,7 @@ export async function create_action_submit(payload) {
     win_count: 0,
   });
 
-  if (!(await update_bookmark(conversation, data))) {
+  if (!(await update_bookmark(conversation, bookmark.id, data))) {
     return status(500);
   }
   return status(200);
