@@ -55,3 +55,23 @@ export async function retrieve_bookmark(conversation) {
   bookmark.link = new URL(bookmark.link);
   return bookmark;
 }
+
+export async function update_bookmark(conversation, data) {
+  data.ts = Date.now();
+  const data_str = JsonKit.stringify(data, {
+    extended: false,
+    minify: false,
+    compress: true,
+  });
+  const response = await send_slack_request('POST', '/bookmarks.edit', {
+    channel_id: conversation,
+    bookmark_id: bookmark.id,
+    link: `${APP_ENDPOINT}/?conversation=${conversation}&data=${data_str}`,
+  });
+  if (response.ok !== true || response.data.ok !== true) {
+    console.error('Failed editing bookmark in conversation after edit');
+    console.log(JsonKit.stringify(response.data));
+    return false;
+  }
+  return true;
+}

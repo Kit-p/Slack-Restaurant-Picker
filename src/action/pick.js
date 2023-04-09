@@ -4,7 +4,11 @@ import { JsonKit } from '@kit-p/json-kit';
 import { initialize_conversation } from './init';
 
 import { send_slack_request } from '../util/request';
-import { retrieve_bookmark, validate_data } from '../util/store';
+import {
+  retrieve_bookmark,
+  update_bookmark,
+  validate_data,
+} from '../util/store';
 
 export function get_pick_payload(
   conversation,
@@ -225,22 +229,223 @@ export async function pick_action(conversation, number_of_choices) {
     return status(500);
   }
 
-  // update bookmark
-  data.ts = Date.now();
-  const data_str = JsonKit.stringify(data, {
-    extended: false,
-    minify: false,
-    compress: true,
-  });
-  response = await send_slack_request('POST', '/bookmarks.edit', {
-    channel_id: conversation,
-    bookmark_id: bookmark.id,
-    link: `${APP_ENDPOINT}/?conversation=${conversation}&data=${data_str}`,
+  if (!(await update_bookmark(conversation, data))) {
+    return status(500);
+  }
+  return status(200);
+}
+
+export async function pick_add_choice_action(
+  conversation,
+  message_ts,
+  user_id
+) {
+  const pick_message = await retrieve_pick_message(conversation, message_ts);
+  if (pick_message == null) {
+    console.error('Failed retrieving action source pick message');
+    return status(500);
+  }
+
+  const pick_metadata = pick_message.metadata;
+  const last_choice = pick_metadata.event_payload.number_of_choices;
+  if (last_choice >= pick_metadata.event_payload.choices.length) {
+    const response = await send_slack_request('POST', '/chat.postEphemeral', {
+      channel: conversation,
+      text: 'No more restaurants to pick!',
+      blocks: [
+        {
+          type: 'section',
+          text: {
+            type: 'mrkdwn',
+            text: '*There are no more restaurants to pick.*\n\nPlease add new ones and start another pick!',
+          },
+        },
+      ],
+      user: user_id,
+    });
+    if (response.ok !== true || response.data.ok !== true) {
+      console.error(
+        `Failed sending error empheral (user: ${user_id}) message to conversation`
+      );
+      console.log(JsonKit.stringify(response.data));
+      return status(500);
+    }
+    return status(200);
+  }
+
+  pick_metadata.event_payload.choices[last_choice].shown_count++;
+  pick_metadata.event_payload.number_of_choices = last_choice + 1;
+  pick_metadata.event_payload.ts = Date.now();
+
+  const message_payload = get_pick_payload(
+    conversation,
+    pick_metadata.event_payload.choices,
+    pick_metadata.event_payload.number_of_choices
+  );
+  let response = await send_slack_request('POST', '/chat.update', {
+    ts: message_ts,
+    ...message_payload,
   });
   if (response.ok !== true || response.data.ok !== true) {
-    console.error('Failed editing bookmark in conversation after pick');
+    console.error('Failed updating pick message to add choice in conversation');
     console.log(JsonKit.stringify(response.data));
     return status(500);
   }
+
+  const bookmark = await retrieve_bookmark(conversation);
+  if (bookmark != null) {
+    const data = JsonKit.parse(bookmark.link.searchParams.get('data'));
+    const restaurant = data.list.find(
+      (restaurant) =>
+        restaurant.id === pick_metadata.event_payload.choices[last_choice].id
+    );
+    if (restaurant != null) {
+      restaurant.shown_count++;
+    }
+
+    await update_bookmark(conversation, data);
+  }
+
+  const voted_users = [
+    ...new Set(
+      pick_metadata.event_payload.choices.flatMap((c) =>
+        c.votes.map((v) => v.user_id)
+      )
+    ),
+  ];
+  for (const user of voted_users) {
+    response = await send_slack_request('POST', '/chat.postEphemeral', {
+      channel: conversation,
+      text: `<@${user}> A new choice has been added! You may consider changing your vote.`,
+      user: user,
+    });
+    if (response.ok !== true || response.data.ok !== true) {
+      console.error(
+        `Failed sending new choice notification empheral (user: ${user}) message to conversation`
+      );
+      console.log(JsonKit.stringify(response.data));
+    }
+  }
+
+  return status(200);
+}
+
+export async function pick_end_action(
+  conversation,
+  message_ts,
+  user_id,
+  trigger_id
+) {
+  const response = await send_slack_request('POST', '/views.open', {
+    trigger_id,
+    view: {
+      type: 'modal',
+      title: {
+        type: 'plain_text',
+        text: 'End Vote',
+        emoji: true,
+      },
+      close: {
+        type: 'plain_text',
+        text: 'No',
+        emoji: true,
+      },
+      submit: {
+        type: 'plain_text',
+        text: 'Yes',
+        emoji: true,
+      },
+      private_metadata: JsonKit.stringify({
+        conversation: conversation,
+        message_ts,
+        user_id,
+      }),
+      callback_id: 'pick_restaurant-pick_end',
+      blocks: [
+        {
+          type: 'section',
+          text: {
+            type: 'mrkdwn',
+            text: 'Are you sure you want to end the vote now?\n\n*This action is irreversible!*',
+          },
+        },
+      ],
+    },
+  });
+  if (response.ok !== true || response.data.ok !== true) {
+    console.error('Failed opening end vote confirmation modal');
+    console.log(JsonKit.stringify(response.data));
+    return status(500);
+  }
+  return status(200);
+}
+
+export async function pick_end_action_submit(payload) {
+  const { conversation, message_ts, user_id } = JsonKit.parse(
+    payload.view.private_metadata
+  );
+
+  const pick_message = await retrieve_pick_message(conversation, message_ts);
+  if (pick_message == null) {
+    console.error('Failed retrieving action source pick message');
+    return status(500);
+  }
+
+  const pick_metadata = pick_message.metadata;
+  pick_metadata.event_payload.is_ended = true;
+  pick_metadata.event_payload.ts = Date.now();
+
+  const message_payload = get_pick_payload(
+    conversation,
+    pick_metadata.event_payload.choices,
+    pick_metadata.event_payload.number_of_choices,
+    true,
+    user_id
+  );
+  let response = await send_slack_request('POST', '/chat.update', {
+    ts: message_ts,
+    ...message_payload,
+  });
+  if (response.ok !== true || response.data.ok !== true) {
+    console.error('Failed updating pick message to end vote in conversation');
+    console.log(JsonKit.stringify(response.data));
+    return status(500);
+  }
+
+  const bookmark = await retrieve_bookmark(conversation);
+  if (bookmark != null) {
+    const data = JsonKit.parse(bookmark.link.searchParams.get('data'));
+    for (const restaurant of data.list) {
+      if (
+        message_payload.metadata.event_payload.winners.includes(restaurant.id)
+      ) {
+        restaurant.win_count++;
+      }
+    }
+
+    await update_bookmark(conversation, data);
+  }
+
+  const voted_users = [
+    ...new Set(
+      pick_metadata.event_payload.choices.flatMap((c) =>
+        c.votes.map((v) => v.user_id)
+      )
+    ),
+  ];
+  for (const user of voted_users) {
+    response = await send_slack_request('POST', '/chat.postEphemeral', {
+      channel: conversation,
+      text: `<@${user}> Vote has ended! You may check the result.`,
+      user: user,
+    });
+    if (response.ok !== true || response.data.ok !== true) {
+      console.error(
+        `Failed sending vote end empheral (user: ${user}) message to conversation`
+      );
+      console.log(JsonKit.stringify(response.data));
+    }
+  }
+
   return status(200);
 }
