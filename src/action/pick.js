@@ -158,12 +158,14 @@ export function get_pick_payload(
 }
 
 export async function retrieve_pick_message(conversation, message_ts) {
-  const response = await send_slack_request('POST', '/conversations.history', {
-    channel: conversation,
-    oldest: message_ts,
-    inclusive: true,
-    limit: 1,
-    include_all_metadata: true,
+  const response = await send_slack_request('GET', '/conversations.history', {
+    params: {
+      channel: conversation,
+      oldest: message_ts,
+      inclusive: true,
+      limit: 1,
+      include_all_metadata: true,
+    }
   });
   if (response.ok !== true || response.data.ok !== true) {
     console.error('Failed retrieving conversation pick message');
