@@ -143,11 +143,14 @@ export async function update_action_submit(payload) {
     }
   }
 
-  const data = JsonKit.parse(bookmark.link.searchParams.get('data'));
+  let data = JsonKit.parse(bookmark.link.searchParams.get('data'));
   if (!validate_data(conversation, data)) {
-    // TODO: call pick_restaurant_repair
-    console.error('Invalid bookmark data');
-    return status(500);
+    try {
+      data = repair_data_unsafe(conversation, data);
+    } catch (_) {
+      console.error('Invalid bookmark data');
+      return status(200);
+    }
   }
 
   if (data.ts > data_ts) {

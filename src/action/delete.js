@@ -22,11 +22,14 @@ export async function delete_action(conversation, restaurant_id, view_id) {
     }
   }
 
-  const data = JsonKit.parse(bookmark.link.searchParams.get('data'));
+  let data = JsonKit.parse(bookmark.link.searchParams.get('data'));
   if (!validate_data(conversation, data)) {
-    // TODO: call pick_restaurant_repair
-    console.error('Invalid bookmark data');
-    return status(500);
+    try {
+      data = repair_data_unsafe(conversation, data);
+    } catch (_) {
+      console.error('Invalid bookmark data');
+      return status(200);
+    }
   }
 
   const restaurant_idx = data.list.findIndex((r) => r.id === restaurant_id);

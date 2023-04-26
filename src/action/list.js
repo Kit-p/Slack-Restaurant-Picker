@@ -23,11 +23,14 @@ export async function list_action(
   }
 
   const raw_data = bookmark.link.searchParams.get('data');
-  const data = JsonKit.parse(raw_data);
+  let data = JsonKit.parse(raw_data);
   if (!validate_data(conversation, data)) {
-    // TODO: call pick_restaurant_repair
-    console.error('Invalid bookmark data');
-    return status(500);
+    try {
+      data = repair_data_unsafe(conversation, data);
+    } catch (_) {
+      console.error('Invalid bookmark data');
+      return status(200);
+    }
   }
 
   const response = await send_slack_request(

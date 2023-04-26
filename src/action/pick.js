@@ -6,6 +6,7 @@ import { initialize_conversation } from './init';
 import { send_slack_request } from '../util/request';
 import {
   retrieve_bookmark,
+  repair_data,
   update_bookmark,
   validate_data,
 } from '../util/store';
@@ -165,7 +166,7 @@ export async function retrieve_pick_message(conversation, message_ts) {
       inclusive: true,
       limit: 1,
       include_all_metadata: true,
-    }
+    },
   });
   if (response.ok !== true || response.data.ok !== true) {
     console.error('Failed retrieving conversation pick message');
@@ -186,11 +187,14 @@ export async function pick_action(conversation, number_of_choices) {
     return status(200);
   }
 
-  const data = JsonKit.parse(bookmark.link.searchParams.get('data'));
+  let data = JsonKit.parse(bookmark.link.searchParams.get('data'));
   if (!validate_data(conversation, data)) {
-    // TODO: call pick_restaurant_repair
-    console.error('Invalid bookmark data');
-    return status(200);
+    try {
+      data = repair_data(conversation, data);
+    } catch (_) {
+      console.error('Invalid bookmark data');
+      return status(200);
+    }
   }
 
   if (data.list.length <= 0) {
