@@ -1,3 +1,4 @@
+import { v4 as uuid } from 'uuid';
 import { JsonKit } from '@kit-p/json-kit';
 
 import { send_slack_request } from './request';
@@ -22,6 +23,46 @@ export function validate_data(conversation, data) {
       (i) => typeof i.id === 'string' && typeof i.name === 'string'
     )
   );
+}
+
+export function repair_data(conversation, data) {
+  // should always be in sync with `validate_data()`
+  const repaired_data = {
+    conversation_id: conversation,
+    ts: Date.now(),
+    list: [],
+  };
+
+  if (data == null || typeof data !== 'object' || Array.isArray(data)) {
+    return repaired_data;
+  }
+
+  if (typeof data.ts === 'number' && data.ts > 0 && data.ts <= Date.now()) {
+    repaired_data.ts = data.ts;
+  }
+
+  if (Array.isArray(data.list)) {
+    for (let i = 0; i < data.list.length; i++) {
+      let item = data.list[i];
+
+      if (item == null || typeof item !== 'object' || Array.isArray(item)) {
+        item = {};
+        data.list[i] = item;
+      }
+
+      if (typeof item.id !== 'string') {
+        item.id = uuid();
+      }
+
+      if (typeof item.name !== 'string') {
+        item.name = 'UNKNOWN';
+      }
+
+      repaired_data.list.push(item);
+    }
+  }
+
+  return repaired_data;
 }
 
 export async function retrieve_bookmark(conversation) {

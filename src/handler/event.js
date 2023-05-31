@@ -15,7 +15,7 @@ export async function event_handler(event, context) {
     case 'pick_restaurant': {
       switch (event.type) {
         case 'workflow_step_execute': {
-          context.waitUntil(async () => await pick_workflow_execute(event));
+          context.waitUntil(pick_workflow_execute(event));
           return status(200);
         }
         default: {

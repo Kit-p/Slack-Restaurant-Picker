@@ -1,0 +1,58 @@
+{
+    "display_information": {
+        "name": "Restaurant Picker",
+        "description": "Pick a Restaurant For You!",
+        "background_color": "#0d7eff"
+    },
+    "features": {
+        "bot_user": {
+            "display_name": "Restaurant Picker",
+            "always_online": true
+        },
+        "slash_commands": [
+            {
+                "command": "/restaurant_picker",
+                "url": "https://slack-restaurant-picker.<your-workers-domain>/api/command", // EDIT
+                "description": " Actions",
+                "usage_hint": "[list | new | pick <N> | help]",
+                "should_escape": false
+            }
+        ],
+        "workflow_steps": [
+            {
+                "name": "Pick Restaurant",
+                "callback_id": "pick_restaurant"
+            }
+        ]
+    },
+    "oauth_config": {
+        "scopes": {
+            "bot": [
+                "channels:history",
+                "channels:read",
+                "chat:write",
+                "groups:history",
+                "groups:read",
+                "workflow.steps:execute",
+                "bookmarks:read",
+                "bookmarks:write",
+                "commands"
+            ]
+        }
+    },
+    "settings": {
+        "event_subscriptions": {
+            "request_url": "https://slack-restaurant-picker.<your-workers-domain>/api/event", // EDIT
+            "bot_events": [
+                "workflow_step_execute"
+            ]
+        },
+        "interactivity": {
+            "is_enabled": true,
+            "request_url": "https://slack-restaurant-picker.<your-workers-domain>/api/interact" // EDIT
+        },
+        "org_deploy_enabled": false,
+        "socket_mode_enabled": false,
+        "token_rotation_enabled": false
+    }
+}
